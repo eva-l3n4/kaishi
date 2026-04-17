@@ -365,7 +365,9 @@ impl AcpClient {
                 arr.iter()
                     .filter_map(|s| {
                         Some(SessionInfo {
-                            session_id: s.get("session_id")?.as_str()?.to_string(),
+                            session_id: s.get("sessionId")
+                                .or_else(|| s.get("session_id"))?
+                                .as_str()?.to_string(),
                             cwd: s
                                 .get("cwd")
                                 .and_then(|v| v.as_str())
@@ -400,7 +402,8 @@ impl AcpClient {
             )
             .await?;
         let session_id = result
-            .get("session_id")
+            .get("sessionId")
+            .or_else(|| result.get("session_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
