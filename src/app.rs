@@ -85,6 +85,11 @@ pub struct App {
     // Active tool calls (for status display)
     pub active_tools: Vec<(String, String)>, // (id, name)
 
+    // Input history
+    pub input_history: Vec<String>,
+    pub history_index: Option<usize>,
+    saved_input: String,
+
     quit: bool,
 }
 
@@ -114,6 +119,9 @@ impl App {
             verbose: false,
             event_tx: None,
             active_tools: Vec::new(),
+            input_history: Vec::new(),
+            history_index: None,
+            saved_input: String::new(),
             quit: false,
         }
     }
@@ -257,16 +265,42 @@ impl App {
         cwd: &str,
     ) -> Result<()> {
         match (key.modifiers, key.code) {
-            // Quit
-            (KeyModifiers::CONTROL, KeyCode::Char('c'))
-            | (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
-                // If streaming, cancel first
+            // Ctrl+C: cancel if thinking, quit if idle
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 if self.status == AgentStatus::Thinking {
                     if let Some(sid) = &self.session_id {
-                        let _ = acp.cancel(sid).await;
+                        let acp = Arc::clone(acp);
+                        let sid = sid.clone();
+                        tokio::spawn(async move {
+                            let _ = acp.cancel(&sid).await;
+                        });
                     }
+                    self.sys_msg("Cancelled.");
+                    self.status = AgentStatus::Idle;
+                    let content = std::mem::take(&mut self.pending_response);
+                    if !content.is_empty() {
+                        self.messages.push(ChatMessage {
+                            role: Role::Assistant,
+                            content,
+                            tokens: None,
+                        });
+                    }
+                    self.pending_thought.clear();
+                    self.active_tools.clear();
+                } else {
+                    self.quit = true;
                 }
+            }
+            // Ctrl+D: always quit
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
                 self.quit = true;
+            }
+
+            // Multiline: Shift+Enter or Alt+Enter inserts newline
+            (KeyModifiers::SHIFT, KeyCode::Enter)
+            | (KeyModifiers::ALT, KeyCode::Enter) => {
+                self.input.insert(self.cursor, '\n');
+                self.cursor += 1;
             }
 
             // Submit message
@@ -275,6 +309,13 @@ impl App {
                 if text.is_empty() {
                     return Ok(());
                 }
+
+                // Save to history
+                if !text.starts_with('/') {
+                    self.input_history.push(text.clone());
+                }
+                self.history_index = None;
+                self.saved_input.clear();
 
                 self.input.clear();
                 self.cursor = 0;
@@ -310,9 +351,31 @@ impl App {
                 let prompt_text = text;
                 let acp = Arc::clone(acp);
                 tokio::spawn(async move {
-                    let result = acp.prompt(&prompt_text, &session_id).await;
-                    if let Err(e) = result {
-                        let _ = event_tx.send(AppEvent::AcpError(format!("Prompt failed: {}", e)));
+                    match acp.prompt(&prompt_text, &session_id).await {
+                        Ok(val) => {
+                            let stop_reason = val
+                                .get("stop_reason")
+                                .or_else(|| val.get("stopReason"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("end_turn")
+                                .to_string();
+                            let usage = val.get("usage").and_then(|u| {
+                                Some(Usage {
+                                    input_tokens: u.get("input_tokens")
+                                        .or_else(|| u.get("inputTokens"))
+                                        .and_then(|v| v.as_u64())?,
+                                    output_tokens: u.get("output_tokens")
+                                        .or_else(|| u.get("outputTokens"))
+                                        .and_then(|v| v.as_u64())?,
+                                })
+                            });
+                            let _ = event_tx.send(AppEvent::PromptDone { stop_reason, usage });
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(AppEvent::AcpError(
+                                format!("Prompt failed: {}", e),
+                            ));
+                        }
                     }
                 });
             }
@@ -326,6 +389,43 @@ impl App {
             }
             (_, KeyCode::PageDown) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(20);
+            }
+
+            // Input history navigation
+            (_, KeyCode::Up)
+                if self.status == AgentStatus::Idle
+                    && !self.input_history.is_empty() =>
+            {
+                match self.history_index {
+                    None => {
+                        self.saved_input = self.input.clone();
+                        let idx = self.input_history.len() - 1;
+                        self.history_index = Some(idx);
+                        self.input = self.input_history[idx].clone();
+                        self.cursor = self.input.len();
+                    }
+                    Some(idx) if idx > 0 => {
+                        self.history_index = Some(idx - 1);
+                        self.input = self.input_history[idx - 1].clone();
+                        self.cursor = self.input.len();
+                    }
+                    _ => {}
+                }
+            }
+            (_, KeyCode::Down) if self.status == AgentStatus::Idle => {
+                match self.history_index {
+                    Some(idx) if idx + 1 < self.input_history.len() => {
+                        self.history_index = Some(idx + 1);
+                        self.input = self.input_history[idx + 1].clone();
+                        self.cursor = self.input.len();
+                    }
+                    Some(_) => {
+                        self.history_index = None;
+                        self.input = std::mem::take(&mut self.saved_input);
+                        self.cursor = self.input.len();
+                    }
+                    None => {}
+                }
             }
 
             // Cursor / editing with modifiers
@@ -558,13 +658,13 @@ impl App {
 
     pub fn handle_tool_start(&mut self, id: &str, name: &str, _kind: Option<&str>) {
         self.active_tools.push((id.to_string(), name.to_string()));
-        if self.verbose {
-            self.messages.push(ChatMessage {
-                role: Role::Tool,
-                content: format!("⚙ {}", name),
-                tokens: None,
-            });
-        }
+        // Always show compact tool label
+        self.messages.push(ChatMessage {
+            role: Role::Tool,
+            content: format!("⚙ {}", name),
+            tokens: None,
+        });
+        self.scroll_offset = 0;
     }
 
     pub fn handle_tool_update(&mut self, id: &str, status: &str, content: Option<&str>) {

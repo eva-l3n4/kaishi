@@ -205,7 +205,10 @@ impl AcpClient {
 
         // Notification (has method, no id) — session_update events
         if let Some(method) = &msg.method {
-            if method == "session_update" || method == "notifications/session_update" {
+            if method == "session_update"
+                || method == "notifications/session_update"
+                || method.ends_with("/session_update")
+            {
                 if let Some(params) = &msg.params {
                     Self::handle_session_update(params, event_tx);
                 }
@@ -278,7 +281,8 @@ impl AcpClient {
             }
             "tool_call" => {
                 let id = params
-                    .get("tool_call_id")
+                    .get("toolCallId")
+                    .or_else(|| params.get("tool_call_id"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -295,7 +299,8 @@ impl AcpClient {
             }
             "tool_call_update" => {
                 let id = params
-                    .get("tool_call_id")
+                    .get("toolCallId")
+                    .or_else(|| params.get("tool_call_id"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -305,7 +310,8 @@ impl AcpClient {
                     .unwrap_or("")
                     .to_string();
                 let content = params
-                    .pointer("/content/0/text")
+                    .pointer("/content/0/content/text")
+                    .or_else(|| params.pointer("/content/0/text"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 let _ = event_tx.send(AppEvent::ToolCallUpdate {

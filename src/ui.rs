@@ -43,12 +43,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
 fn draw_chat(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
+    let input_lines = app.input.lines().count().max(1);
+    let input_height = (input_lines as u16 + 2).clamp(3, 10);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Status bar
-            Constraint::Min(5),   // Messages
-            Constraint::Length(3), // Input
+            Constraint::Length(1),            // Status bar
+            Constraint::Min(5),              // Messages
+            Constraint::Length(input_height), // Input
         ])
         .split(area);
 
