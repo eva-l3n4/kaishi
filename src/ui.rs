@@ -44,7 +44,7 @@ fn indent(narrow: bool) -> &'static str {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     match &app.screen.clone() {
         Screen::Picker => {
-            ui_picker::draw_picker(frame, &app.sessions, app.picker_selected);
+            ui_picker::draw_picker(frame, &app.sessions, app.picker_selected, app.picker_scroll_offset);
         }
         Screen::Chat => {
             draw_chat(frame, app);
@@ -338,15 +338,18 @@ fn pre_wrap_lines(lines: Vec<Line<'static>>, max_width: usize) -> Vec<Line<'stat
                 row_spans.push(Span::styled(chunk, span_style));
             }
         }
-        if !row_spans.is_empty() {
-            result.push(Line::from(row_spans));
-        }
     }
     result
 }
 
-fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbose: bool, narrow: bool) {
-    // Tool messages render as a single compact line with status icon
+fn render_message(
+    lines: &mut Vec<Line>,
+    msg: &ChatMessage,
+    width: usize,
+    verbose: bool,
+    narrow: bool,
+) {
+    // Tool messages render with box-drawing frame
     if msg.role == Role::Tool {
         let (icon, color) = if msg.content.starts_with('✓') {
             ("✓", palette::SUCCESS)
@@ -356,35 +359,95 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbos
             ("⚙", palette::DIM)
         };
 
-        let rest = msg.content
+        let rest = msg
+            .content
             .trim_start_matches(['✓', '✗', '⚙', ' '])
             .to_string();
 
-        // Split name from detail at first " (" or " — "
-        let (name, detail) = if let Some(idx) = rest.find(" (") {
-            (&rest[..idx], Some(&rest[idx..]))
+        // Parse name and summary (separated by \x1f)
+        let (name, summary) = if let Some(sep) = rest.find('\x1f') {
+            (rest[..sep].to_string(), rest[sep + 1..].to_string())
+        } else if let Some(idx) = rest.find(" (") {
+            // Legacy format fallback
+            (rest[..idx].to_string(), rest[idx + 2..].trim_end_matches(')').to_string())
         } else if let Some(idx) = rest.find(" — ") {
-            (&rest[..idx], Some(&rest[idx..]))
+            (rest[..idx].to_string(), rest[idx + 5..].to_string())
         } else {
-            (rest.as_str(), None)
+            (rest.clone(), String::new())
         };
 
-        let mut spans = vec![
-            Span::styled(format!("  {} ", icon), Style::default().fg(color)),
-            Span::styled(
-                name.to_string(),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
-        ];
+        let ind = indent(narrow);
 
-        if let Some(d) = detail {
-            spans.push(Span::styled(
-                d.to_string(),
-                Style::default().fg(palette::DIM),
-            ));
+        if summary.is_empty() {
+            // Simple one-liner: just icon + name
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+                Span::styled(
+                    name,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        } else {
+            // Framed tool call with summary
+            // Top: ┌─ icon name ─────
+            let header_text = format!("{} {} ", icon, name);
+            let remaining_width = width.saturating_sub(ind.len() + 2 + header_text.len());
+            let rule = "─".repeat(remaining_width.min(40));
+
+            lines.push(Line::from(vec![
+                Span::raw(format!("{}┌─", ind)),
+                Span::styled(
+                    format!(" {} ", icon),
+                    Style::default().fg(color),
+                ),
+                Span::styled(
+                    name.clone(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" {}", rule),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+
+            // Content: │ summary (may span multiple lines)
+            let max_summary_width = width.saturating_sub(ind.len() + 4); // "│ " prefix
+            for summary_line in summary.lines() {
+                // Truncate long lines
+                let display = if summary_line.len() > max_summary_width {
+                    let end = summary_line
+                        .char_indices()
+                        .nth(max_summary_width.saturating_sub(1))
+                        .map(|(i, _)| i)
+                        .unwrap_or(summary_line.len());
+                    format!("{}…", &summary_line[..end])
+                } else {
+                    summary_line.to_string()
+                };
+
+                let content_color = if msg.content.starts_with('✗') {
+                    palette::ERROR
+                } else {
+                    Color::DarkGray
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{}│ ", ind),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(display, Style::default().fg(content_color)),
+                ]));
+            }
+
+            // Bottom: └─────
+            let bottom_width = width.saturating_sub(ind.len() + 1);
+            lines.push(Line::from(Span::styled(
+                format!("{}└{}", ind, "─".repeat(bottom_width.min(45))),
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
-        lines.push(Line::from(spans));
         return;
     }
 

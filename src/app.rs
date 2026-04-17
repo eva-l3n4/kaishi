@@ -63,6 +63,7 @@ pub struct App {
     // Session picker
     pub sessions: Vec<SessionInfo>,
     pub picker_selected: usize,
+    pub picker_scroll_offset: u16,
 
     // Active session
     pub session_id: Option<String>,
@@ -118,6 +119,7 @@ impl App {
             modal: ModalState::None,
             sessions,
             picker_selected: 0,
+            picker_scroll_offset: 0,
             session_id: None,
             messages: vec![ChatMessage {
                 role: Role::System,
@@ -814,24 +816,15 @@ impl App {
 
         self.active_tools.push((id.to_string(), name.to_string()));
 
-        // Build a compact tool description with input preview
-        let preview = input
-            .map(|s| {
-                let clean = s.trim();
-                if clean.len() > 80 {
-                    format!(" ({}…)", &clean[..clean.char_indices().nth(80).map(|(i,_)|i).unwrap_or(clean.len())])
-                } else if !clean.is_empty() {
-                    format!(" ({})", clean)
-                } else {
-                    String::new()
-                }
-            })
+        // Parse input into a human-readable summary
+        let summary = input
+            .and_then(|s| summarize_tool_input(name, s))
             .unwrap_or_default();
 
         let idx = self.messages.len();
         self.messages.push(ChatMessage {
             role: Role::Tool,
-            content: format!("⚙ {}{}", name, preview),
+            content: format!("⚙ {}\x1f{}", name, summary),
             tokens: None,
         });
         self.tool_msg_map.insert(id.to_string(), idx);
@@ -846,34 +839,44 @@ impl App {
         // Update the existing tool message in-place
         if let Some(&msg_idx) = self.tool_msg_map.get(id) {
             if msg_idx < self.messages.len() {
-                // Extract the tool name from active_tools or fallback parse
-                let name = self.active_tools.iter()
-                    .find(|(tid, _)| tid == id)
-                    .map(|(_, n)| n.clone())
-                    .unwrap_or_else(|| {
-                        self.messages[msg_idx].content
-                            .trim_start_matches(['✓', '✗', '⚙', ' '])
-                            .split([' ', '('])
-                            .next()
-                            .unwrap_or("")
-                            .to_string()
-                    });
-
-                let new_content = match status {
-                    "completed" => format!("✓ {}", name),
-                    "error" => {
-                        let detail = content
-                            .map(|t| {
-                                let preview: String = t.chars().take(100).collect();
-                                format!(" — {}", preview)
-                            })
-                            .unwrap_or_default();
-                        format!("✗ {}{}", name, detail)
-                    }
-                    _ => format!("⚙ {}", name),
+                // Extract name and summary from existing content (separated by \x1f)
+                let existing = &self.messages[msg_idx].content;
+                let rest = existing
+                    .trim_start_matches(['✓', '✗', '⚙', ' '])
+                    .to_string();
+                let (name, summary) = if let Some(sep) = rest.find('\x1f') {
+                    (rest[..sep].to_string(), rest[sep + 1..].to_string())
+                } else {
+                    // Fallback: split at first space/paren
+                    let n = rest.split([' ', '(']).next().unwrap_or("").to_string();
+                    (n, String::new())
                 };
 
-                self.messages[msg_idx].content = new_content;
+                let status_icon = match status {
+                    "completed" => "✓",
+                    "error" => "✗",
+                    _ => "⚙",
+                };
+
+                // For errors, append error detail to summary
+                let final_summary = if status == "error" {
+                    let detail = content
+                        .map(|t| {
+                            let preview: String = t.chars().take(80).collect();
+                            if summary.is_empty() {
+                                preview
+                            } else {
+                                format!("{} — {}", summary, preview)
+                            }
+                        })
+                        .unwrap_or(summary);
+                    detail
+                } else {
+                    summary
+                };
+
+                self.messages[msg_idx].content =
+                    format!("{} {}\x1f{}", status_icon, name, final_summary);
 
                 // Invalidate cached rendering for this message
                 if msg_idx < self.line_cache.len() {
@@ -916,25 +919,35 @@ impl App {
 
     /// Handle mouse scroll: positive = scroll up, negative = scroll down.
     pub fn handle_scroll(&mut self, delta: i16) {
-        if delta > 0 {
-            self.scroll_offset = self.scroll_offset.saturating_add(delta as u16);
-
-            // Trigger lazy load when scrolled near the top
-            if self.history_loaded < self.history_total
-                && !self.loading_more_history
-            {
-                // Heuristic: if scroll offset is within ~50 lines of the total cached lines,
-                // we're near the top. Use a generous threshold.
-                let total_cached_lines: usize = self.line_cache.iter().map(|c| c.len()).sum();
-                if self.scroll_offset as usize + 20 >= total_cached_lines {
-                    self.loading_more_history = true;
-                    if let Some(tx) = &self.event_tx {
-                        let _ = tx.send(crate::event::AppEvent::LoadMoreHistory);
-                    }
+        match self.screen {
+            Screen::Picker => {
+                if delta > 0 {
+                    self.picker_scroll_offset = self.picker_scroll_offset.saturating_add(delta as u16);
+                } else {
+                    self.picker_scroll_offset = self.picker_scroll_offset.saturating_sub((-delta) as u16);
                 }
             }
-        } else {
-            self.scroll_offset = self.scroll_offset.saturating_sub((-delta) as u16);
+            Screen::Chat => {
+                if delta > 0 {
+                    self.scroll_offset = self.scroll_offset.saturating_add(delta as u16);
+
+                    // Trigger lazy load when scrolled near the top
+                    if self.history_loaded < self.history_total
+                        && !self.loading_more_history
+                    {
+                        let total_cached_lines: usize = self.line_cache.iter().map(|c| c.len()).sum();
+                        if self.scroll_offset as usize + 20 >= total_cached_lines {
+                            self.loading_more_history = true;
+                            if let Some(tx) = &self.event_tx {
+                                let _ = tx.send(crate::event::AppEvent::LoadMoreHistory);
+                            }
+                        }
+                    }
+                } else {
+                    self.scroll_offset = self.scroll_offset.saturating_sub((-delta) as u16);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -998,4 +1011,137 @@ impl App {
 
         self.scroll_offset = 0;
     }
+}
+
+/// Produce a short, readable summary of tool input by tool name.
+/// Returns None if input is empty or unparseable.
+fn summarize_tool_input(tool_name: &str, raw_input: &str) -> Option<String> {
+    let trimmed = raw_input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Try parsing as JSON
+    let json: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+
+    let summary = match tool_name {
+        "terminal" => {
+            let cmd = json.get("command").and_then(|v| v.as_str())?;
+            truncate_summary(cmd, 120)
+        }
+        "read_file" => {
+            let path = json.get("path").and_then(|v| v.as_str())?;
+            let offset = json.get("offset").and_then(|v| v.as_u64());
+            let limit = json.get("limit").and_then(|v| v.as_u64());
+            match (offset, limit) {
+                (Some(o), Some(l)) => format!("{} ({}–{})", path, o, o + l),
+                (Some(o), None) => format!("{} (from {})", path, o),
+                _ => path.to_string(),
+            }
+        }
+        "write_file" => {
+            let path = json.get("path").and_then(|v| v.as_str())?;
+            let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let lines = content.lines().count();
+            format!("{} ({} lines)", path, lines)
+        }
+        "patch" => {
+            let path = json.get("path").and_then(|v| v.as_str()).unwrap_or("(patch)");
+            let mode = json.get("mode").and_then(|v| v.as_str()).unwrap_or("replace");
+            if mode == "patch" {
+                "multi-file patch".to_string()
+            } else {
+                path.to_string()
+            }
+        }
+        "search_files" => {
+            let pattern = json.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+            let target = json.get("target").and_then(|v| v.as_str()).unwrap_or("content");
+            let path = json.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            if target == "files" {
+                format!("files matching {} in {}", pattern, path)
+            } else {
+                format!("\"{}\" in {}", pattern, path)
+            }
+        }
+        "web_search" => {
+            let q = json.get("query").and_then(|v| v.as_str())?;
+            truncate_summary(q, 80)
+        }
+        "web_extract" => {
+            let urls = json.get("urls").and_then(|v| v.as_array())?;
+            if urls.len() == 1 {
+                urls[0].as_str().unwrap_or("url").to_string()
+            } else {
+                format!("{} URLs", urls.len())
+            }
+        }
+        "browser_navigate" => {
+            let url = json.get("url").and_then(|v| v.as_str())?;
+            truncate_summary(url, 80)
+        }
+        "browser_click" | "browser_type" => {
+            let r = json.get("ref").and_then(|v| v.as_str()).unwrap_or("?");
+            let text = json.get("text").and_then(|v| v.as_str());
+            match text {
+                Some(t) => format!("{} → {}", r, truncate_summary(t, 60)),
+                None => r.to_string(),
+            }
+        }
+        "skill_view" | "skill_manage" => {
+            let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            name.to_string()
+        }
+        "memory" | "hindsight_retain" | "hindsight_recall" => {
+            let content = json.get("content")
+                .or_else(|| json.get("query"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("…");
+            truncate_summary(content, 60)
+        }
+        "delegate_task" => {
+            let goal = json.get("goal").and_then(|v| v.as_str());
+            let tasks = json.get("tasks").and_then(|v| v.as_array());
+            match (goal, tasks) {
+                (Some(g), _) => truncate_summary(g, 60),
+                (_, Some(t)) => format!("{} parallel tasks", t.len()),
+                _ => "task".to_string(),
+            }
+        }
+        "vision_analyze" | "browser_vision" => {
+            let q = json.get("question").and_then(|v| v.as_str()).unwrap_or("analyze");
+            truncate_summary(q, 60)
+        }
+        _ => {
+            // Generic: show first string-valued key
+            if let Some(obj) = json.as_object() {
+                for (k, v) in obj.iter() {
+                    if let Some(s) = v.as_str() {
+                        if !s.is_empty() && s.len() < 100 {
+                            return Some(format!("{}: {}", k, truncate_summary(s, 60)));
+                        }
+                    }
+                }
+            }
+            // Fallback: compact JSON preview
+            let compact = trimmed.replace('\n', " ");
+            truncate_summary(&compact, 60)
+        }
+    };
+
+    Some(summary)
+}
+
+fn truncate_summary(s: &str, max: usize) -> String {
+    // Single-line it
+    let clean: String = s.lines().next().unwrap_or(s).to_string();
+    if clean.len() <= max {
+        return clean;
+    }
+    let end = clean
+        .char_indices()
+        .nth(max.saturating_sub(1))
+        .map(|(i, _)| i)
+        .unwrap_or(clean.len());
+    format!("{}…", &clean[..end])
 }

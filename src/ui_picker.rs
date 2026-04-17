@@ -1,165 +1,302 @@
 use ratatui::{
     Frame,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+
+use unicode_width::UnicodeWidthStr;
 
 use crate::event::SessionInfo;
 
-/// Draw the session picker screen.
-pub fn draw_picker(frame: &mut Frame, sessions: &[SessionInfo], selected: usize) {
+/// Draw the session picker screen as a scrollable card list.
+pub fn draw_picker(
+    frame: &mut Frame,
+    sessions: &[SessionInfo],
+    selected: usize,
+    scroll_offset: u16,
+) {
     let area = frame.area();
     let narrow = area.width < 60;
 
+    // Layout: header + session list + footer hint
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header block
+            Constraint::Min(3),   // Session list (scrollable)
+            Constraint::Length(2), // Footer hints
+        ])
+        .split(area);
+
+    draw_header(frame, chunks[0]);
+    draw_session_list(frame, sessions, selected, scroll_offset, chunks[1], narrow);
+    draw_footer(frame, sessions, chunks[2]);
+}
+
+fn draw_header(frame: &mut Frame, area: Rect) {
     let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(" 🌸 Hanami ");
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(Color::DarkGray));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
+    let title = Line::from(vec![
+        Span::styled(" 🌸 ", Style::default()),
+        Span::styled(
+            "Hanami",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" — Sessions", Style::default().fg(Color::DarkGray)),
+    ]);
 
-    // "New Session" is always first (index 0)
-    let marker = if selected == 0 { "  > " } else { "    " };
-    let style = if selected == 0 {
+    frame.render_widget(Paragraph::new(title), inner);
+}
+
+fn draw_session_list(
+    frame: &mut Frame,
+    sessions: &[SessionInfo],
+    selected: usize,
+    scroll_offset: u16,
+    area: Rect,
+    narrow: bool,
+) {
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    // ── "New Session" card ──────────────────────────
+    let is_selected = selected == 0;
+    render_new_session_card(&mut lines, is_selected, inner_width, narrow);
+
+    // ── Existing session cards ──────────────────────
+    for (i, session) in sessions.iter().enumerate() {
+        let idx = i + 1;
+        let is_selected = selected == idx;
+        render_session_card(&mut lines, session, is_selected, inner_width, narrow);
+    }
+
+    // Scrolling
+    let total_lines = lines.len() as u16;
+    let visible_height = area.height;
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll_pos = max_scroll.saturating_sub(scroll_offset.min(max_scroll));
+
+    let paragraph = Paragraph::new(Text::from(lines)).scroll((scroll_pos, 0));
+
+    frame.render_widget(paragraph, area);
+
+    // Scrollbar
+    if total_lines > visible_height {
+        let mut scrollbar_state =
+            ScrollbarState::new(max_scroll as usize).position(scroll_pos as usize);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓")),
+            area,
+            &mut scrollbar_state,
+        );
+    }
+}
+
+fn render_new_session_card(
+    lines: &mut Vec<Line<'static>>,
+    selected: bool,
+    _width: usize,
+    _narrow: bool,
+) {
+    let bg = if selected {
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
-    lines.push(Line::from(Span::styled(
-        format!("{}+ New Session", marker),
-        style,
-    )));
 
-    lines.push(Line::from(""));
-
-    // Existing sessions
-    let max_label = if narrow {
-        (area.width as usize).saturating_sub(8)
+    let marker = if selected { "▌ " } else { "  " };
+    let marker_style = if selected {
+        Style::default().fg(Color::Cyan)
     } else {
-        36
+        Style::default().fg(Color::DarkGray)
     };
 
-    for (i, session) in sessions.iter().enumerate() {
-        let idx = i + 1; // offset by New Session
-        let marker = if selected == idx { "  > " } else { "    " };
+    lines.push(Line::from(vec![
+        Span::styled(marker, marker_style),
+        Span::styled("+ New Session", bg),
+    ]));
 
-        // Title or fallback to last cwd component or session_id prefix
-        let label = if let Some(ref title) = session.title {
-            title.clone()
-        } else if session.cwd != "." {
-            session
-                .cwd
-                .rsplit('/')
-                .next()
-                .unwrap_or(&session.cwd)
-                .to_string()
-        } else {
-            session.session_id[..8.min(session.session_id.len())].to_string()
-        };
+    // Separator
+    lines.push(Line::from(""));
+}
 
-        let display_label = if label.len() > max_label {
-            format!("{}…", &label[..max_label.saturating_sub(1)])
-        } else {
-            label
-        };
+fn render_session_card(
+    lines: &mut Vec<Line<'static>>,
+    session: &SessionInfo,
+    selected: bool,
+    width: usize,
+    narrow: bool,
+) {
+    let marker = if selected { "▌ " } else { "  " };
+    let marker_style = if selected {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
 
-        let style = if selected == idx {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
+    // ── Line 1: Title ──────────────────────────────
+    let title = session_title(session);
+    let max_title = if narrow {
+        width.saturating_sub(4)
+    } else {
+        width.saturating_sub(16) // leave room for time
+    };
 
-        if narrow {
-            // Narrow: just label, no details
-            lines.push(Line::from(Span::styled(
-                format!("{}{}", marker, display_label),
-                style,
-            )));
-        } else {
-            // Relative time from last_active or started_at
-            let time_hint = session
-                .last_active
-                .or(session.started_at)
-                .map(format_relative_time)
-                .unwrap_or_default();
+    let display_title = truncate_str(&title, max_title);
+    let title_style = if selected {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
 
-            // Source badge
-            let source_badge = session
-                .source
-                .as_deref()
-                .map(|s| match s {
-                    "acp" => "",
-                    "cli" => " [cli]",
-                    "discord" => " [discord]",
-                    "telegram" => " [telegram]",
-                    other => {
-                        let _ = other;
-                        ""
-                    }
-                })
-                .unwrap_or("");
+    let mut title_spans = vec![
+        Span::styled(marker.to_string(), marker_style),
+        Span::styled(display_title.to_string(), title_style),
+    ];
 
-            let source_display = if source_badge.is_empty() {
-                session
-                    .source
-                    .as_deref()
-                    .filter(|s| *s != "acp")
-                    .map(|s| format!(" [{}]", s))
-                    .unwrap_or_default()
-            } else {
-                source_badge.to_string()
-            };
+    // Right-aligned time on wide viewports
+    if !narrow {
+        let time_hint = session
+            .last_active
+            .or(session.started_at)
+            .map(format_relative_time)
+            .unwrap_or_default();
 
-            let detail = format!(
-                "{}{}{}",
-                format_args!("{} msgs", session.history_len),
-                if time_hint.is_empty() {
-                    String::new()
-                } else {
-                    format!(", {}", time_hint)
-                },
-                source_display,
-            );
-
-            let detail_style = if selected == idx {
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(format!("{}{:<38}", marker, display_label), style),
-                Span::styled(format!("  {}", detail), detail_style),
-            ]));
+        if !time_hint.is_empty() {
+            let title_display_width = marker.width() + display_title.width();
+            let padding = width.saturating_sub(title_display_width + time_hint.width() + 1);
+            title_spans.push(Span::raw(" ".repeat(padding)));
+            title_spans.push(Span::styled(
+                time_hint,
+                Style::default().fg(Color::DarkGray),
+            ));
         }
     }
 
-    lines.push(Line::from(""));
+    lines.push(Line::from(title_spans));
 
-    let hint_text = if sessions.is_empty() {
-        "  Connecting to Hermes…"
+    // ── Line 2: Metadata (dim) ─────────────────────
+    let indent = if selected { "▌ " } else { "  " };
+    let mut meta_parts: Vec<String> = Vec::new();
+
+    // Message count
+    meta_parts.push(format!("{} msgs", session.history_len));
+
+    // Source badge (skip "acp" — that's us)
+    if let Some(ref source) = session.source {
+        if source != "acp" {
+            meta_parts.push(format!("[{}]", source));
+        }
+    }
+
+    // Model (if available and different from default)
+    if !session.model.is_empty() {
+        let model_display = if session.model.len() > 20 {
+            format!("{}…", &session.model[..19])
+        } else {
+            session.model.clone()
+        };
+        meta_parts.push(model_display);
+    }
+
+    // CWD (abbreviated)
+    let cwd_hint = if session.cwd != "." {
+        session
+            .cwd
+            .rsplit('/')
+            .next()
+            .unwrap_or(&session.cwd)
+            .to_string()
     } else {
-        "  Enter: select  Esc: quit"
+        String::new()
     };
-    let hint = Line::from(Span::styled(
+    if !cwd_hint.is_empty() && !narrow {
+        meta_parts.push(format!("~/{}", cwd_hint));
+    }
+
+    let meta_text = meta_parts.join(" · ");
+    let max_meta = width.saturating_sub(4);
+    let display_meta = truncate_str(&meta_text, max_meta);
+
+    let meta_style = Style::default().fg(Color::DarkGray);
+    lines.push(Line::from(vec![
+        Span::styled(indent, marker_style),
+        Span::styled(display_meta.to_string(), meta_style),
+    ]));
+
+    // Separator line (empty)
+    lines.push(Line::from(""));
+}
+
+fn draw_footer(frame: &mut Frame, sessions: &[SessionInfo], area: Rect) {
+    let hint_text = if sessions.is_empty() {
+        " Connecting to Hermes…"
+    } else {
+        " ↑↓/jk: navigate  Enter: select  Esc: quit"
+    };
+
+    let line = Line::from(Span::styled(
         hint_text,
         Style::default().fg(Color::DarkGray),
     ));
-    lines.push(hint);
 
-    let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+// ── Helpers ────────────────────────────────────────────────
+
+fn session_title(session: &SessionInfo) -> String {
+    if let Some(ref title) = session.title {
+        title.clone()
+    } else if session.cwd != "." {
+        session
+            .cwd
+            .rsplit('/')
+            .next()
+            .unwrap_or(&session.cwd)
+            .to_string()
+    } else {
+        // Short session ID
+        let end = session
+            .session_id
+            .char_indices()
+            .nth(8)
+            .map(|(i, _)| i)
+            .unwrap_or(session.session_id.len());
+        session.session_id[..end].to_string()
+    }
+}
+
+/// Truncate a string by character count, adding ellipsis if needed.
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.width() <= max_chars {
+        return s.to_string();
+    }
+    let mut w = 0;
+    let truncated: String = s
+        .chars()
+        .take_while(|c| {
+            let cw = c.to_string().width();
+            w += cw;
+            w <= max_chars.saturating_sub(1)
+        })
+        .collect();
+    format!("{}…", truncated)
 }
 
 /// Format a UNIX timestamp as a relative time string.
