@@ -1,7 +1,9 @@
-mod api;
+mod acp;
 mod app;
 mod event;
 mod ui;
+mod ui_modal;
+mod ui_picker;
 
 use anyhow::Result;
 use app::App;
@@ -16,14 +18,11 @@ use std::io;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Read config from env / args
-    let api_url =
-        std::env::var("HERMES_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8642".into());
-    let api_key = std::env::var("HERMES_API_KEY").unwrap_or_default();
-    let model = std::env::var("HERMES_MODEL").unwrap_or_else(|_| "hermes-agent".into());
-
-    // Check for a session to resume from CLI arg
-    let resume_session = std::env::args().nth(1);
+    // Parse args
+    let profile = std::env::var("HERMES_PROFILE").ok();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
 
     // Terminal setup
     enable_raw_mode()?;
@@ -33,55 +32,46 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    // App + event loop
-    let client = api::HermesClient::new(&api_url, &api_key, &model);
-    let mut app = App::new(client);
+    // Event loop + ACP client
     let mut events = EventLoop::new(250);
-    app.event_tx = Some(events.sender());
+    let event_tx = events.sender();
 
-    // Fetch server status (model name, etc.)
-    app.fetch_status().await;
+    let acp = acp::AcpClient::spawn(event_tx.clone(), profile.as_deref()).await?;
 
-    // Resume session if requested
-    if let Some(session_prefix) = resume_session {
-        match app.client.get_session_messages(&session_prefix).await {
-            Ok((resolved_id, api_messages)) => {
-                app.messages.clear();
-                app.session_id = resolved_id.clone();
-                let count = api_messages.len();
-                for m in api_messages {
-                    let role = match m.role.as_str() {
-                        "user" => app::Role::User,
-                        "assistant" => app::Role::Assistant,
-                        _ => app::Role::System,
-                    };
-                    app.messages.push(app::ChatMessage {
-                        role,
-                        content: m.content,
-                        tokens: None,
-                    });
-                }
-                app.messages.push(app::ChatMessage {
-                    role: app::Role::System,
-                    content: format!("✓ Resumed session ({} messages loaded)", count),
-                    tokens: None,
-                });
-            }
-            Err(e) => {
-                app.messages.push(app::ChatMessage {
-                    role: app::Role::System,
-                    content: format!("Failed to resume session: {}", e),
-                    tokens: None,
-                });
-            }
+    // Initialize ACP handshake
+    let init_result = acp.initialize().await;
+    if let Err(e) = &init_result {
+        eprintln!("ACP initialize failed: {}", e);
+    }
+
+    // Fetch sessions for the picker
+    let sessions = acp.list_sessions().await.unwrap_or_default();
+
+    // Create app
+    let mut app = App::new(sessions);
+    app.event_tx = Some(event_tx);
+
+    // Extract model name from init result
+    if let Ok(ref init) = init_result {
+        if let Some(model) = init
+            .get("server_info")
+            .and_then(|s| s.get("model"))
+            .and_then(|m| m.as_str())
+        {
+            app.model_name = model.to_string();
         }
     }
 
-    let result = run(&mut terminal, &mut app, &mut events).await;
+    let result = run(&mut terminal, &mut app, &mut events, &acp, &cwd).await;
 
-    // Restore terminal
+    // Cleanup
+    acp.shutdown().await;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -91,13 +81,15 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     events: &mut EventLoop,
+    acp: &acp::AcpClient,
+    cwd: &str,
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         match events.next().await? {
             event::AppEvent::Key(key) => {
-                app.handle_key(key).await?;
+                app.handle_key(key, acp, cwd).await?;
             }
             event::AppEvent::Tick => {
                 app.tick();
@@ -105,16 +97,43 @@ async fn run(
             event::AppEvent::MouseScroll(delta) => {
                 app.handle_scroll(delta);
             }
-            event::AppEvent::StreamDelta(delta) => {
-                app.handle_stream_delta(&delta);
-            }
-            event::AppEvent::StreamDone(usage) => {
-                app.handle_stream_done(usage);
-            }
-            event::AppEvent::StreamError(err) => {
-                app.handle_stream_error(&err);
-            }
             event::AppEvent::Resize(_, _) => {}
+
+            // ACP events
+            event::AppEvent::AgentMessage(text) => {
+                app.handle_agent_message(&text);
+            }
+            event::AppEvent::AgentThought(text) => {
+                app.handle_agent_thought(&text);
+            }
+            event::AppEvent::ToolCallStart { id, name, kind } => {
+                app.handle_tool_start(&id, &name, kind.as_deref());
+            }
+            event::AppEvent::ToolCallUpdate {
+                id,
+                status,
+                content,
+            } => {
+                app.handle_tool_update(&id, &status, content.as_deref());
+            }
+            event::AppEvent::PromptDone { stop_reason, usage } => {
+                app.handle_prompt_done(&stop_reason, usage);
+            }
+            event::AppEvent::ApprovalRequest {
+                request_id,
+                command,
+                options,
+            } => {
+                app.show_approval_modal(request_id, command, options);
+            }
+            event::AppEvent::AcpError(err) => {
+                app.sys_msg(format!("ACP error: {}", err));
+                app.status = app::AgentStatus::Idle;
+            }
+            event::AppEvent::SlashCommandResponse(text) => {
+                app.sys_msg(text);
+            }
+            _ => {}
         }
 
         if app.should_quit() {

@@ -2,8 +2,8 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tokio::sync::mpsc;
 
-use crate::api::{HermesClient, Message};
-use crate::event::{AppEvent, Usage};
+use crate::acp::AcpClient;
+use crate::event::{AppEvent, ApprovalOption, SessionInfo, Usage};
 
 /// Visible role tag for messages in the conversation.
 #[derive(Debug, Clone, PartialEq)]
@@ -11,6 +11,8 @@ pub enum Role {
     User,
     Assistant,
     System,
+    Tool,
+    Thought,
 }
 
 /// A single message in the conversation view.
@@ -23,65 +25,80 @@ pub struct ChatMessage {
 
 /// What the assistant is currently doing.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum AgentStatus {
     Idle,
-    Streaming,
+    Thinking,
     Error(String),
+}
+
+/// Which screen is active.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Screen {
+    Picker,
+    Chat,
+}
+
+/// Modal overlay state.
+#[derive(Debug)]
+pub enum ModalState {
+    None,
+    Approval {
+        command: String,
+        options: Vec<ApprovalOption>,
+        selected: usize,
+        request_id: serde_json::Value,
+    },
 }
 
 /// Application state.
 pub struct App {
-    pub client: HermesClient,
+    pub screen: Screen,
+    pub modal: ModalState,
 
-    /// Full conversation history (rendered in the scroll view).
+    // Session picker
+    pub sessions: Vec<SessionInfo>,
+    pub picker_selected: usize,
+
+    // Active session
+    pub session_id: Option<String>,
+
+    // Chat
     pub messages: Vec<ChatMessage>,
-
-    /// Input buffer (what the user is typing).
     pub input: String,
-    /// Cursor position within `input`.
     pub cursor: usize,
-
-    /// Scroll offset for the message viewport (0 = bottom / latest).
     pub scroll_offset: u16,
-
-    /// Current agent status.
     pub status: AgentStatus,
-
-    /// Accumulator for the in-progress assistant response.
     pub pending_response: String,
+    pub pending_thought: String,
 
-    /// Session ID for continuity.
-    pub session_id: String,
-
-    /// Resolved model name from server.
+    // Display
     pub model_name: String,
-    /// Display-friendly model alias.
-    pub model_display: String,
-
-    /// Session title (if known, e.g. after resume).
     pub session_title: Option<String>,
+    pub tick: u64,
+    pub verbose: bool,
 
-    /// Event sender — lets us inject stream events from API tasks.
+    // Event channel for sending ACP requests
     pub event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
 
-    /// Spinner tick counter (for animation).
-    pub tick: u64,
+    // Active tool calls (for status display)
+    pub active_tools: Vec<(String, String)>, // (id, name)
 
-    /// Mouse event counter (diagnostic — shown in status bar).
-    pub mouse_events: u64,
-
-    /// Exit flag.
     quit: bool,
 }
 
 impl App {
-    pub fn new(client: HermesClient) -> Self {
-        let model_display = client.model().to_string();
+    pub fn new(sessions: Vec<SessionInfo>) -> Self {
         Self {
-            client,
+            screen: Screen::Picker,
+            modal: ModalState::None,
+            sessions,
+            picker_selected: 0,
+            session_id: None,
             messages: vec![ChatMessage {
                 role: Role::System,
-                content: "Welcome to Hermes TUI. Type a message or /help for commands.".into(),
+                content: "Welcome to 🌸 Hanami. Type a message or /help for commands."
+                    .into(),
                 tokens: None,
             }],
             input: String::new(),
@@ -89,13 +106,13 @@ impl App {
             scroll_offset: 0,
             status: AgentStatus::Idle,
             pending_response: String::new(),
-            session_id: uuid::Uuid::new_v4().to_string(),
+            pending_thought: String::new(),
             model_name: String::new(),
-            model_display,
             session_title: None,
-            event_tx: None,
-            mouse_events: 0,
             tick: 0,
+            verbose: false,
+            event_tx: None,
+            active_tools: Vec::new(),
             quit: false,
         }
     }
@@ -108,22 +125,8 @@ impl App {
         self.tick = self.tick.wrapping_add(1);
     }
 
-    /// Fetch server status on startup.
-    pub async fn fetch_status(&mut self) {
-        match self.client.get_status().await {
-            Ok(status) => {
-                self.model_name = status.model;
-                self.model_display = status.model_display;
-            }
-            Err(_) => {
-                // Fallback: use what we configured
-                self.model_name = self.client.model().to_string();
-            }
-        }
-    }
-
     /// Push a system message into the chat.
-    fn sys_msg(&mut self, msg: impl Into<String>) {
+    pub fn sys_msg(&mut self, msg: impl Into<String>) {
         self.messages.push(ChatMessage {
             role: Role::System,
             content: msg.into(),
@@ -132,192 +135,111 @@ impl App {
         self.scroll_offset = 0;
     }
 
-    /// Build the messages array for the API request.
-    fn build_api_messages(&self) -> Vec<Message> {
-        self.messages
-            .iter()
-            .filter(|m| m.role == Role::User || m.role == Role::Assistant)
-            .map(|m| Message {
-                role: match m.role {
-                    Role::User => "user".into(),
-                    Role::Assistant => "assistant".into(),
-                    _ => "system".into(),
-                },
-                content: m.content.clone(),
-            })
-            .collect()
-    }
+    // ---- Key dispatch -------------------------------------------------------
 
-    /// Handle a slash command. Returns true if the input was consumed.
-    async fn handle_command(&mut self, text: &str) -> bool {
-        let parts: Vec<&str> = text.splitn(2, ' ').collect();
-        let cmd = parts[0].to_lowercase();
-        let arg = parts.get(1).map(|s| s.trim()).unwrap_or("");
+    pub async fn handle_key(
+        &mut self,
+        key: KeyEvent,
+        acp: &AcpClient,
+        cwd: &str,
+    ) -> Result<()> {
+        // Modal takes priority
+        if let ModalState::Approval { .. } = &self.modal {
+            return self.handle_modal_key(key, acp).await;
+        }
 
-        match cmd.as_str() {
-            "/quit" | "/exit" | "/q" => {
-                self.quit = true;
-                true
-            }
-            "/clear" => {
-                self.messages.clear();
-                self.scroll_offset = 0;
-                true
-            }
-            "/new" => {
-                self.messages.clear();
-                self.session_id = uuid::Uuid::new_v4().to_string();
-                self.session_title = None;
-                self.scroll_offset = 0;
-                self.sys_msg("New session started.");
-                true
-            }
-            "/sessions" | "/session" | "/s" => {
-                self.sys_msg("Loading sessions…");
-                match self.client.list_sessions(15).await {
-                    Ok(sessions) => {
-                        if sessions.is_empty() {
-                            self.sys_msg("No sessions found.");
-                        } else {
-                            let mut lines = vec!["Recent sessions:".to_string()];
-                            for (i, s) in sessions.iter().enumerate() {
-                                let title = s.title.as_deref().unwrap_or("(untitled)");
-                                let preview = s.preview.as_deref().unwrap_or("");
-                                let short_id = if s.id.len() > 12 {
-                                    &s.id[..12]
-                                } else {
-                                    &s.id
-                                };
-                                let source = s.source.as_deref().unwrap_or("?");
-                                let count = s.message_count.unwrap_or(0);
-                                let display = if title != "(untitled)" {
-                                    title.to_string()
-                                } else if !preview.is_empty() {
-                                    preview.to_string()
-                                } else {
-                                    "(empty)".to_string()
-                                };
-                                lines.push(format!(
-                                    "  {:>2}. [{}] {} ({}, {} msgs)",
-                                    i + 1,
-                                    short_id,
-                                    display,
-                                    source,
-                                    count
-                                ));
-                            }
-                            lines.push(String::new());
-                            lines.push("Use /resume <id-prefix> to load a session.".to_string());
-                            // Remove the "Loading…" message
-                            if let Some(last) = self.messages.last() {
-                                if last.content.contains("Loading") {
-                                    self.messages.pop();
-                                }
-                            }
-                            self.sys_msg(lines.join("\n"));
-                        }
-                    }
-                    Err(e) => {
-                        self.sys_msg(format!("Failed to list sessions: {}", e));
-                    }
-                }
-                true
-            }
-            "/resume" | "/r" => {
-                if arg.is_empty() {
-                    self.sys_msg("Usage: /resume <session-id-or-prefix>");
-                    return true;
-                }
-                self.sys_msg(format!("Resuming session {}…", arg));
-                match self.client.get_session_messages(arg).await {
-                    Ok((resolved_id, api_messages)) => {
-                        self.messages.clear();
-                        self.session_id = resolved_id.clone();
-                        self.session_title = None;
-
-                        let msg_count = api_messages.len();
-                        for m in api_messages {
-                            let role = match m.role.as_str() {
-                                "user" => Role::User,
-                                "assistant" => Role::Assistant,
-                                _ => Role::System,
-                            };
-                            self.messages.push(ChatMessage {
-                                role,
-                                content: m.content,
-                                tokens: None,
-                            });
-                        }
-
-                        let short = if resolved_id.len() > 16 {
-                            &resolved_id[..16]
-                        } else {
-                            &resolved_id
-                        };
-                        self.sys_msg(format!(
-                            "✓ Resumed session {} ({} messages loaded)",
-                            short, msg_count
-                        ));
-                        self.scroll_offset = 0;
-                    }
-                    Err(e) => {
-                        self.sys_msg(format!("Failed to resume: {}", e));
-                    }
-                }
-                true
-            }
-            "/model" => {
-                if self.model_name.is_empty() {
-                    self.sys_msg(format!("Model: {}", self.model_display));
-                } else {
-                    self.sys_msg(format!(
-                        "Model: {} (display: {})",
-                        self.model_name, self.model_display
-                    ));
-                }
-                true
-            }
-            "/approve" => {
-                let _ = self.client.approve(&self.session_id).await;
-                self.sys_msg("✓ Approval sent.");
-                true
-            }
-            "/deny" => {
-                let _ = self.client.deny(&self.session_id).await;
-                self.sys_msg("✗ Denial sent.");
-                true
-            }
-            "/help" | "/h" | "/?" => {
-                self.sys_msg(
-                    "Commands:\n\
-                     \n\
-                     /new             Start a new session\n\
-                     /sessions        List recent sessions\n\
-                     /resume <id>     Resume a session by ID or prefix\n\
-                     /model           Show current model\n\
-                     /approve         Approve pending dangerous command\n\
-                     /deny            Deny pending dangerous command\n\
-                     /clear           Clear the screen\n\
-                     /quit            Exit\n\
-                     \n\
-                     Scroll: PgUp/PgDn, Ctrl+U (up 10), Ctrl+E (down)"
-                        .to_string(),
-                );
-                true
-            }
-            _ if cmd.starts_with('/') => {
-                self.sys_msg(format!("Unknown command: {}. Type /help for commands.", cmd));
-                true
-            }
-            _ => false,
+        match self.screen {
+            Screen::Picker => self.handle_picker_key(key, acp, cwd).await,
+            Screen::Chat => self.handle_chat_key(key, acp, cwd).await,
         }
     }
 
-    pub async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+    // ---- Picker key handler -------------------------------------------------
+
+    async fn handle_picker_key(
+        &mut self,
+        key: KeyEvent,
+        acp: &AcpClient,
+        cwd: &str,
+    ) -> Result<()> {
+        let total = 1 + self.sessions.len(); // New Session + existing
+
+        match (key.modifiers, key.code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('c'))
+            | (_, KeyCode::Esc) => {
+                self.quit = true;
+            }
+
+            (_, KeyCode::Up) | (_, KeyCode::Char('k'))
+                if self.picker_selected > 0 =>
+            {
+                self.picker_selected -= 1;
+            }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if self.picker_selected + 1 < total =>
+            {
+                self.picker_selected += 1;
+            }
+
+            (_, KeyCode::Enter) => {
+                if self.picker_selected == 0 {
+                    // New session
+                    match acp.new_session(cwd).await {
+                        Ok(sid) => {
+                            self.session_id = Some(sid);
+                            self.screen = Screen::Chat;
+                        }
+                        Err(e) => {
+                            self.sys_msg(format!("Failed to create session: {}", e));
+                            self.screen = Screen::Chat;
+                        }
+                    }
+                } else {
+                    // Resume existing session
+                    let idx = self.picker_selected - 1;
+                    if let Some(session) = self.sessions.get(idx) {
+                        let sid = session.session_id.clone();
+                        match acp.resume_session(cwd, &sid).await {
+                            Ok(()) => {
+                                self.session_id = Some(sid);
+                                self.screen = Screen::Chat;
+                                self.sys_msg(format!(
+                                    "Resumed session ({} messages)",
+                                    session.history_len
+                                ));
+                            }
+                            Err(e) => {
+                                self.sys_msg(format!("Failed to resume: {}", e));
+                                self.screen = Screen::Chat;
+                            }
+                        }
+                    }
+                }
+            }
+
+            _ => {}
+        }
+        Ok(())
+    }
+
+    // ---- Chat key handler ---------------------------------------------------
+
+    async fn handle_chat_key(
+        &mut self,
+        key: KeyEvent,
+        acp: &AcpClient,
+        cwd: &str,
+    ) -> Result<()> {
         match (key.modifiers, key.code) {
             // Quit
             (KeyModifiers::CONTROL, KeyCode::Char('c'))
             | (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                // If streaming, cancel first
+                if self.status == AgentStatus::Thinking {
+                    if let Some(sid) = &self.session_id {
+                        let _ = acp.cancel(sid).await;
+                    }
+                }
                 self.quit = true;
             }
 
@@ -331,41 +253,41 @@ impl App {
                 self.input.clear();
                 self.cursor = 0;
 
-                // Try slash command first
-                if self.handle_command(&text).await {
+                // Try local slash commands first
+                if self.handle_local_command(&text, acp, cwd).await {
                     return Ok(());
                 }
 
+                // Forward slash commands to ACP as prompts
                 // Add user message
                 self.messages.push(ChatMessage {
                     role: Role::User,
-                    content: text,
+                    content: text.clone(),
                     tokens: None,
                 });
                 self.scroll_offset = 0;
 
-                // Start streaming
-                self.status = AgentStatus::Streaming;
+                // Start thinking
+                self.status = AgentStatus::Thinking;
                 self.pending_response.clear();
+                self.pending_thought.clear();
+                self.active_tools.clear();
 
-                let api_messages = self.build_api_messages();
-                let session_id = self.session_id.clone();
+                let session_id = self.session_id.clone().unwrap_or_default();
                 let event_tx = self
                     .event_tx
                     .as_ref()
-                    .expect("event_tx must be set before handling keys")
+                    .expect("event_tx must be set")
                     .clone();
 
-                let client = self.client.clone();
-
-                tokio::spawn(async move {
-                    if let Err(e) = client
-                        .stream_chat(api_messages, Some(&session_id), event_tx.clone())
-                        .await
-                    {
-                        let _ = event_tx.send(AppEvent::StreamError(e.to_string()));
-                    }
-                });
+                // Send prompt via ACP in a background task
+                let prompt_text = text;
+                // We need to clone the AcpClient fields we need, or use Arc
+                // For now, send the prompt directly since we have &acp
+                let result = acp.prompt(&prompt_text, &session_id).await;
+                if let Err(e) = result {
+                    let _ = event_tx.send(AppEvent::AcpError(format!("Prompt failed: {}", e)));
+                }
             }
 
             // Scroll
@@ -379,7 +301,7 @@ impl App {
                 self.scroll_offset = self.scroll_offset.saturating_sub(20);
             }
 
-            // Cursor / editing with modifiers (must come before generic Char)
+            // Cursor / editing with modifiers
             (KeyModifiers::CONTROL, KeyCode::Char('a')) | (_, KeyCode::Home) => {
                 self.cursor = 0;
             }
@@ -408,44 +330,44 @@ impl App {
                 self.input.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
             }
-            (_, KeyCode::Backspace) => {
-                if self.cursor > 0 {
-                    let prev = self.input[..self.cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    self.input.replace_range(prev..self.cursor, "");
-                    self.cursor = prev;
-                }
+            (_, KeyCode::Backspace)
+                if self.cursor > 0 =>
+            {
+                let prev = self.input[..self.cursor]
+                    .char_indices()
+                    .next_back()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                self.input.replace_range(prev..self.cursor, "");
+                self.cursor = prev;
             }
-            (_, KeyCode::Delete) => {
-                if self.cursor < self.input.len() {
-                    let next = self.input[self.cursor..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| self.cursor + i)
-                        .unwrap_or(self.input.len());
-                    self.input.replace_range(self.cursor..next, "");
-                }
+            (_, KeyCode::Delete)
+                if self.cursor < self.input.len() =>
+            {
+                let next = self.input[self.cursor..]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| self.cursor + i)
+                    .unwrap_or(self.input.len());
+                self.input.replace_range(self.cursor..next, "");
             }
-            (_, KeyCode::Left) => {
-                if self.cursor > 0 {
-                    self.cursor = self.input[..self.cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                }
+            (_, KeyCode::Left)
+                if self.cursor > 0 =>
+            {
+                self.cursor = self.input[..self.cursor]
+                    .char_indices()
+                    .next_back()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
             }
-            (_, KeyCode::Right) => {
-                if self.cursor < self.input.len() {
-                    self.cursor = self.input[self.cursor..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| self.cursor + i)
-                        .unwrap_or(self.input.len());
-                }
+            (_, KeyCode::Right)
+                if self.cursor < self.input.len() =>
+            {
+                self.cursor = self.input[self.cursor..]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| self.cursor + i)
+                    .unwrap_or(self.input.len());
             }
 
             _ => {}
@@ -454,22 +376,202 @@ impl App {
         Ok(())
     }
 
-    /// Handle mouse scroll: positive = scroll up (older), negative = scroll down (newer).
-    pub fn handle_scroll(&mut self, delta: i16) {
-        self.mouse_events += 1;
-        if delta > 0 {
-            self.scroll_offset = self.scroll_offset.saturating_add(delta as u16);
+    // ---- Modal key handler --------------------------------------------------
+
+    async fn handle_modal_key(&mut self, key: KeyEvent, acp: &AcpClient) -> Result<()> {
+        let (options_len, _selected) = if let ModalState::Approval {
+            ref options,
+            selected,
+            ..
+        } = self.modal
+        {
+            (options.len(), selected)
         } else {
-            self.scroll_offset = self.scroll_offset.saturating_sub((-delta) as u16);
+            return Ok(());
+        };
+
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                if let ModalState::Approval {
+                    ref mut selected, ..
+                } = self.modal
+                {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                }
+            }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                if let ModalState::Approval {
+                    ref mut selected, ..
+                } = self.modal
+                {
+                    if *selected + 1 < options_len {
+                        *selected += 1;
+                    }
+                }
+            }
+
+            (_, KeyCode::Enter) => {
+                if let ModalState::Approval {
+                    ref options,
+                    selected,
+                    ref request_id,
+                    ..
+                } = self.modal
+                {
+                    if let Some(opt) = options.get(selected) {
+                        let response = serde_json::json!({
+                            "option_id": opt.id,
+                        });
+                        let _ = acp.respond(request_id.clone(), response).await;
+                        self.sys_msg(format!("Approval: {}", opt.name));
+                    }
+                }
+                self.modal = ModalState::None;
+            }
+
+            (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                // Esc = deny
+                if let ModalState::Approval {
+                    ref request_id, ..
+                } = self.modal
+                {
+                    let response = serde_json::json!({
+                        "option_id": "deny",
+                    });
+                    let _ = acp.respond(request_id.clone(), response).await;
+                    self.sys_msg("Approval: Denied");
+                }
+                self.modal = ModalState::None;
+            }
+
+            _ => {}
+        }
+        Ok(())
+    }
+
+    // ---- Local slash commands ------------------------------------------------
+
+    async fn handle_local_command(&mut self, text: &str, acp: &AcpClient, cwd: &str) -> bool {
+        let parts: Vec<&str> = text.splitn(2, ' ').collect();
+        let cmd = parts[0].to_lowercase();
+
+        match cmd.as_str() {
+            "/quit" | "/exit" | "/q" => {
+                self.quit = true;
+                true
+            }
+            "/clear" => {
+                self.messages.clear();
+                self.scroll_offset = 0;
+                true
+            }
+            "/new" => {
+                match acp.new_session(cwd).await {
+                    Ok(sid) => {
+                        self.session_id = Some(sid);
+                        self.messages.clear();
+                        self.session_title = None;
+                        self.scroll_offset = 0;
+                        self.sys_msg("New session started.");
+                    }
+                    Err(e) => {
+                        self.sys_msg(format!("Failed to create session: {}", e));
+                    }
+                }
+                true
+            }
+            "/model" => {
+                if self.model_name.is_empty() {
+                    self.sys_msg("Model: (unknown — set via ACP initialize)");
+                } else {
+                    self.sys_msg(format!("Model: {}", self.model_name));
+                }
+                true
+            }
+            "/verbose" | "/v" => {
+                self.verbose = !self.verbose;
+                self.sys_msg(format!(
+                    "Verbose mode: {}",
+                    if self.verbose { "on" } else { "off" }
+                ));
+                true
+            }
+            "/help" | "/h" | "/?" => {
+                self.sys_msg(
+                    "Commands:\n\
+                     \n\
+                     /new             Start a new session\n\
+                     /model           Show current model\n\
+                     /verbose         Toggle tool call details\n\
+                     /clear           Clear the screen\n\
+                     /quit            Exit\n\
+                     \n\
+                     Scroll: PgUp/PgDn, Ctrl+U (up 10)\n\
+                     Cancel: Ctrl+C during generation"
+                        .to_string(),
+                );
+                true
+            }
+            _ => false,
         }
     }
 
-    pub fn handle_stream_delta(&mut self, delta: &str) {
-        self.pending_response.push_str(delta);
+    // ---- ACP event handlers -------------------------------------------------
+
+    pub fn handle_agent_message(&mut self, text: &str) {
+        self.pending_response.push_str(text);
         self.scroll_offset = 0;
     }
 
-    pub fn handle_stream_done(&mut self, usage: Option<Usage>) {
+    pub fn handle_agent_thought(&mut self, text: &str) {
+        self.pending_thought.push_str(text);
+    }
+
+    pub fn handle_tool_start(&mut self, id: &str, name: &str, _kind: Option<&str>) {
+        self.active_tools.push((id.to_string(), name.to_string()));
+        if self.verbose {
+            self.messages.push(ChatMessage {
+                role: Role::Tool,
+                content: format!("⚙ {}", name),
+                tokens: None,
+            });
+        }
+    }
+
+    pub fn handle_tool_update(&mut self, id: &str, status: &str, content: Option<&str>) {
+        if status == "completed" || status == "error" {
+            self.active_tools.retain(|(tid, _)| tid != id);
+        }
+        if self.verbose {
+            if let Some(text) = content {
+                let preview = if text.len() > 200 {
+                    format!("{}...", &text[..200])
+                } else {
+                    text.to_string()
+                };
+                self.messages.push(ChatMessage {
+                    role: Role::Tool,
+                    content: format!("[{}] {}", status, preview),
+                    tokens: None,
+                });
+            }
+        }
+    }
+
+    pub fn handle_prompt_done(&mut self, _stop_reason: &str, usage: Option<Usage>) {
+        // Flush pending thought
+        if !self.pending_thought.is_empty() {
+            let thought = std::mem::take(&mut self.pending_thought);
+            self.messages.push(ChatMessage {
+                role: Role::Thought,
+                content: thought,
+                tokens: None,
+            });
+        }
+
+        // Flush pending response
         let content = std::mem::take(&mut self.pending_response);
         if !content.is_empty() {
             self.messages.push(ChatMessage {
@@ -479,19 +581,30 @@ impl App {
             });
         }
         self.status = AgentStatus::Idle;
+        self.active_tools.clear();
         self.scroll_offset = 0;
     }
 
-    pub fn handle_stream_error(&mut self, err: &str) {
-        if !self.pending_response.is_empty() {
-            let content = std::mem::take(&mut self.pending_response);
-            self.messages.push(ChatMessage {
-                role: Role::Assistant,
-                content,
-                tokens: None,
-            });
+    pub fn show_approval_modal(
+        &mut self,
+        request_id: serde_json::Value,
+        command: String,
+        options: Vec<ApprovalOption>,
+    ) {
+        self.modal = ModalState::Approval {
+            command,
+            options,
+            selected: 0,
+            request_id,
+        };
+    }
+
+    /// Handle mouse scroll: positive = scroll up, negative = scroll down.
+    pub fn handle_scroll(&mut self, delta: i16) {
+        if delta > 0 {
+            self.scroll_offset = self.scroll_offset.saturating_add(delta as u16);
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub((-delta) as u16);
         }
-        self.sys_msg(format!("⚠ Error: {}", err));
-        self.status = AgentStatus::Idle;
     }
 }

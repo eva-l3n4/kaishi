@@ -6,7 +6,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
-use crate::app::{AgentStatus, App, ChatMessage, Role};
+use crate::app::{AgentStatus, App, ChatMessage, ModalState, Role, Screen};
+use crate::ui_modal;
+use crate::ui_picker;
 
 /// Spinner frames for the streaming indicator.
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -14,15 +16,38 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 /// Indent prefix for message body lines.
 const INDENT: &str = "    ";
 
-/// Main draw function — called every frame.
+/// Top-level draw — dispatches to the active screen, then overlays modal.
 pub fn draw(frame: &mut Frame, app: &App) {
+    match app.screen {
+        Screen::Picker => {
+            ui_picker::draw_picker(frame, &app.sessions, app.picker_selected);
+        }
+        Screen::Chat => {
+            draw_chat(frame, app);
+        }
+    }
+
+    // Modal overlay (drawn on top of any screen)
+    if let ModalState::Approval {
+        ref command,
+        ref options,
+        selected,
+        ..
+    } = app.modal
+    {
+        ui_modal::draw_approval_modal(frame, command, options, selected);
+    }
+}
+
+/// Draw the chat view (status bar + messages + input).
+fn draw_chat(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Status bar
-            Constraint::Min(5),    // Messages
+            Constraint::Length(1), // Status bar
+            Constraint::Min(5),   // Messages
             Constraint::Length(3), // Input
         ])
         .split(area);
@@ -34,33 +59,39 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let model = if app.model_name.is_empty() {
-        &app.model_display
+        "hermes"
     } else {
         &app.model_name
     };
 
     let session_hint = if let Some(ref title) = app.session_title {
         format!(" │ {}", truncate(title, 30))
-    } else {
-        let short = if app.session_id.len() > 8 {
-            &app.session_id[..8]
-        } else {
-            &app.session_id
-        };
+    } else if let Some(ref sid) = app.session_id {
+        let short = if sid.len() > 8 { &sid[..8] } else { sid };
         format!(" │ {}", short)
+    } else {
+        String::new()
     };
 
     let status_text = match &app.status {
         AgentStatus::Idle => {
             let msg_count = app.messages.iter().filter(|m| m.role == Role::User).count();
             format!(
-                " 🌸 Hermes │ {} │ {} msgs{}",
+                " 🌸 Hanami │ {} │ {} msgs{}",
                 model, msg_count, session_hint,
             )
         }
-        AgentStatus::Streaming => {
+        AgentStatus::Thinking => {
             let spinner = SPINNER[(app.tick as usize) % SPINNER.len()];
-            format!(" {} thinking… │ {}{}", spinner, model, session_hint)
+            let tool_hint = if let Some((_, name)) = app.active_tools.last() {
+                format!(" ({})", name)
+            } else {
+                String::new()
+            };
+            format!(
+                " {} thinking…{} │ {}{}",
+                spinner, tool_hint, model, session_hint
+            )
         }
         AgentStatus::Error(e) => {
             format!(" ⚠ {} │ {}", truncate(e, 40), model)
@@ -69,7 +100,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let style = match &app.status {
         AgentStatus::Idle => Style::default().bg(Color::DarkGray).fg(Color::White),
-        AgentStatus::Streaming => Style::default().bg(Color::Blue).fg(Color::White),
+        AgentStatus::Thinking => Style::default().bg(Color::Blue).fg(Color::White),
         AgentStatus::Error(_) => Style::default().bg(Color::Red).fg(Color::White),
     };
 
@@ -120,10 +151,26 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         all_lines.push(Line::from(""));
     }
 
+    // Show pending thought if verbose
+    if app.verbose && !app.pending_thought.is_empty() {
+        let label = Line::from(vec![
+            Span::styled("  ○ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "thinking…",
+                Style::default().fg(Color::DarkGray).italic(),
+            ),
+        ]);
+        all_lines.push(label);
+        for line in app.pending_thought.lines() {
+            all_lines.push(Line::from(Span::styled(
+                format!("{}{}", INDENT, line),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        all_lines.push(Line::from(""));
+    }
+
     // ── Pre-wrap: split any line wider than inner_width ──────────────
-    // This makes total_lines == total visual rows so scroll math is exact.
-    // We do this instead of Paragraph::Wrap which makes the row count
-    // unknowable from outside.
     all_lines = pre_wrap_lines(all_lines, inner_width);
 
     let total_lines = all_lines.len() as u16;
@@ -143,7 +190,6 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
     let paragraph = Paragraph::new(Text::from(all_lines))
         .block(block)
         .scroll((scroll_pos, 0));
-    // NOTE: no .wrap() — we pre-wrapped above so line count is exact.
 
     frame.render_widget(paragraph, area);
 
@@ -162,9 +208,6 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Split any Line wider than `max_width` into multiple Lines.
-/// Uses the first span's style for continuation lines. This loses mid-line
-/// style transitions on wrapped boundaries — acceptable tradeoff for correct
-/// scroll behavior.
 fn pre_wrap_lines(lines: Vec<Line<'static>>, max_width: usize) -> Vec<Line<'static>> {
     if max_width == 0 {
         return lines;
@@ -175,11 +218,9 @@ fn pre_wrap_lines(lines: Vec<Line<'static>>, max_width: usize) -> Vec<Line<'stat
             result.push(line);
             continue;
         }
-        // Flatten spans into one string, preserving first span's style
         let style = line.spans.first().map(|s| s.style).unwrap_or_default();
         let full: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 
-        // Split at max_width character boundaries
         let mut chars = full.chars().peekable();
         while chars.peek().is_some() {
             let chunk: String = chars.by_ref().take(max_width).collect();
@@ -194,6 +235,8 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize) {
         Role::User => ("  ❯ ", Color::Cyan, "you"),
         Role::Assistant => ("  ◆ ", Color::Magenta, "assistant"),
         Role::System => ("  ● ", Color::Yellow, "system"),
+        Role::Tool => ("  ⚙ ", Color::DarkGray, "tool"),
+        Role::Thought => ("  ○ ", Color::DarkGray, "thought"),
     };
 
     let mut header_spans = vec![
@@ -213,6 +256,14 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize) {
     match msg.role {
         Role::Assistant => {
             render_markdown_lines(lines, &msg.content, width);
+        }
+        Role::Thought => {
+            for text_line in msg.content.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", INDENT, text_line),
+                    Style::default().fg(Color::DarkGray).italic(),
+                )));
+            }
         }
         _ => {
             for text_line in msg.content.lines() {
@@ -265,27 +316,27 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize) {
         let trimmed = raw_line.trim_start();
 
         // Headings
-        if trimmed.starts_with("### ") {
+        if let Some(heading) = trimmed.strip_prefix("### ") {
             lines.push(Line::from(Span::styled(
-                format!("{}{}", INDENT, &trimmed[4..]),
+                format!("{}{}", INDENT, heading),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
             continue;
         }
-        if trimmed.starts_with("## ") {
+        if let Some(heading) = trimmed.strip_prefix("## ") {
             lines.push(Line::from(Span::styled(
-                format!("{}{}", INDENT, &trimmed[3..]),
+                format!("{}{}", INDENT, heading),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
             continue;
         }
-        if trimmed.starts_with("# ") {
+        if let Some(heading) = trimmed.strip_prefix("# ") {
             lines.push(Line::from(Span::styled(
-                format!("{}{}", INDENT, &trimmed[2..]),
+                format!("{}{}", INDENT, heading),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -331,11 +382,11 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize) {
         }
 
         // Blockquotes
-        if trimmed.starts_with("> ") {
+        if let Some(quote) = trimmed.strip_prefix("> ") {
             lines.push(Line::from(vec![
                 Span::styled(format!("{}▎ ", INDENT), Style::default().fg(Color::Blue)),
                 Span::styled(
-                    trimmed[2..].to_string(),
+                    quote.to_string(),
                     Style::default()
                         .fg(Color::Blue)
                         .add_modifier(Modifier::ITALIC),

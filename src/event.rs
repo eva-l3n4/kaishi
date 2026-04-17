@@ -1,31 +1,86 @@
 use anyhow::Result;
 use crossterm::event::{Event, KeyEvent, MouseEventKind};
-use futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-/// Events the UI loop cares about.
-#[derive(Debug)]
-pub enum AppEvent {
-    Key(KeyEvent),
-    Tick,
-    /// Mouse scroll delta: positive = up, negative = down.
-    MouseScroll(i16),
-    StreamDelta(String),
-    StreamDone(Option<Usage>),
-    StreamError(String),
-    Resize(u16, u16),
-}
-
+/// Token usage from a completed prompt.
 #[derive(Debug, Clone)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
 
+/// An option in an approval request.
+#[derive(Debug, Clone)]
+pub struct ApprovalOption {
+    pub id: String,
+    pub name: String,
+}
+
+/// Lightweight session info for the picker.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub cwd: String,
+    pub model: String,
+    pub history_len: usize,
+    // Future upstream enrichment:
+    // pub title: Option<String>,
+    // pub started_at: Option<f64>,
+    // pub last_active: Option<f64>,
+    // pub source: Option<String>,
+}
+
+/// Events the UI loop cares about.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum AppEvent {
+    // Terminal events
+    Key(KeyEvent),
+    Tick,
+    MouseScroll(i16),
+    Resize(u16, u16),
+
+    // ACP agent events
+    AgentMessage(String),
+    AgentThought(String),
+    ToolCallStart {
+        id: String,
+        name: String,
+        kind: Option<String>,
+    },
+    ToolCallUpdate {
+        id: String,
+        status: String,
+        content: Option<String>,
+    },
+    PromptDone {
+        stop_reason: String,
+        usage: Option<Usage>,
+    },
+
+    // Approval (server-to-client JSON-RPC request)
+    ApprovalRequest {
+        request_id: serde_json::Value,
+        command: String,
+        options: Vec<ApprovalOption>,
+    },
+
+    // ACP lifecycle
+    AcpReady,
+    AcpError(String),
+    SessionsLoaded(Vec<SessionInfo>),
+    SessionCreated(String),
+    SessionResumed(String),
+
+    // Slash command responses from ACP server
+    SlashCommandResponse(String),
+}
+
 pub struct EventLoop {
     rx: mpsc::UnboundedReceiver<AppEvent>,
-    _tx: mpsc::UnboundedSender<AppEvent>,
+    tx: mpsc::UnboundedSender<AppEvent>,
 }
 
 impl EventLoop {
@@ -33,9 +88,9 @@ impl EventLoop {
         let (tx, rx) = mpsc::unbounded_channel();
         let event_tx = tx.clone();
 
-        // Async EventStream — works with EnableMouseCapture for mouse scroll
         tokio::spawn(async move {
             let mut reader = crossterm::event::EventStream::new();
+            use futures_lite::StreamExt;
             loop {
                 let tick_delay = tokio::time::sleep(Duration::from_millis(tick_ms));
                 tokio::select! {
@@ -61,7 +116,7 @@ impl EventLoop {
                             Some(Ok(Event::Resize(w, h))) => {
                                 let _ = event_tx.send(AppEvent::Resize(w, h));
                             }
-                            Some(Ok(_)) => {} // Focus, paste — ignore
+                            Some(Ok(_)) => {}
                             Some(Err(_)) => break,
                             None => break,
                         }
@@ -75,7 +130,7 @@ impl EventLoop {
             }
         });
 
-        Self { rx, _tx: tx }
+        Self { rx, tx }
     }
 
     pub async fn next(&mut self) -> Result<AppEvent> {
@@ -85,8 +140,8 @@ impl EventLoop {
             .ok_or_else(|| anyhow::anyhow!("event channel closed"))
     }
 
-    /// Get a sender handle for injecting stream events from the API task.
+    /// Get a sender for injecting ACP events from the reader task.
     pub fn sender(&self) -> mpsc::UnboundedSender<AppEvent> {
-        self._tx.clone()
+        self.tx.clone()
     }
 }
