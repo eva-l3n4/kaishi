@@ -433,7 +433,14 @@ impl AcpClient {
                 arr.iter()
                     .filter_map(|m| {
                         let role = m.get("role")?.as_str()?.to_string();
-                        let content = m.get("content")?.as_str()?.to_string();
+                        let content = m
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if content.is_empty() {
+                            return None;
+                        }
                         Some((role, content))
                     })
                     .collect()

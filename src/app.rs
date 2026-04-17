@@ -768,10 +768,15 @@ impl App {
 
     /// Load conversation history from the server into the messages list.
     pub fn load_history(&mut self, history: Vec<(String, String)>) {
+        if history.is_empty() {
+            self.sys_msg("Session resumed (no history available).");
+            return;
+        }
+
         // Clear the welcome message and "resuming" messages
         self.messages.clear();
 
-        for (role, content) in history {
+        for (role, content) in &history {
             let msg_role = match role.as_str() {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
@@ -781,17 +786,13 @@ impl App {
             };
             self.messages.push(ChatMessage {
                 role: msg_role,
-                content,
+                content: content.clone(),
                 tokens: None,
             });
         }
 
-        if self.messages.is_empty() {
-            self.sys_msg("Session resumed (no history).");
-        } else {
-            let count = self.messages.len();
-            self.sys_msg(format!("Loaded {} messages from history.", count));
-        }
+        let count = history.len();
+        self.sys_msg(format!("Loaded {} messages from history.", count));
         self.scroll_offset = 0;
     }
 }
