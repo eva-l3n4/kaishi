@@ -111,14 +111,17 @@ async fn main() -> Result<()> {
         // Initialize handshake
         match acp_init.initialize().await {
             Ok(init) => {
-                if let Some(model) = init
+                // Store agent version for display, but NOT as model name.
+                // agentInfo.name is "hermes-agent", not the LLM model.
+                let _ = event_tx_init.send(event::AppEvent::AcpReady);
+                if let Some(version) = init
                     .get("agentInfo")
                     .or_else(|| init.get("agent_info"))
-                    .and_then(|s| s.get("name"))
+                    .and_then(|s| s.get("version"))
                     .and_then(|m| m.as_str())
                 {
                     let _ = event_tx_init.send(event::AppEvent::SlashCommandResponse(
-                        format!("__model_name:{}", model),
+                        format!("__agent_version:{}", version),
                     ));
                 }
             }
@@ -309,8 +312,11 @@ async fn run(
                 // ACP is ready — picker can now accept Enter
             }
             event::AppEvent::SlashCommandResponse(text) => {
-                // Hack: model name arrives via this channel from init
-                if let Some(model) = text.strip_prefix("__model_name:") {
+                // Internal signals from init
+                if let Some(version) = text.strip_prefix("__agent_version:") {
+                    // Store for /version display if needed; don't set as model_name
+                    let _ = version; // TODO: store agent_version if we want to display it
+                } else if let Some(model) = text.strip_prefix("__model_name:") {
                     app.model_name = model.to_string();
                 } else {
                     app.sys_msg(text);
@@ -339,17 +345,8 @@ async fn run(
                         let acp_init = Arc::clone(&acp);
                         let event_tx_init = event_tx.clone();
                         tokio::spawn(async move {
-                            if let Ok(init) = acp_init.initialize().await {
-                                if let Some(model) = init
-                                    .get("agentInfo")
-                                    .or_else(|| init.get("agent_info"))
-                                    .and_then(|s| s.get("name"))
-                                    .and_then(|m| m.as_str())
-                                {
-                                    let _ = event_tx_init.send(event::AppEvent::SlashCommandResponse(
-                                        format!("__model_name:{}", model),
-                                    ));
-                                }
+                            if let Ok(_init) = acp_init.initialize().await {
+                                let _ = event_tx_init.send(event::AppEvent::AcpReady);
                             }
                             if let Ok(sessions) = acp_init.list_sessions().await {
                                 let _ = event_tx_init.send(event::AppEvent::SessionsLoaded(sessions));
