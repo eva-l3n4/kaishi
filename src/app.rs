@@ -103,6 +103,11 @@ pub struct App {
     pub history_loaded: usize,
     pub loading_more_history: bool,
 
+    // Token tracking
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub prompt_count: u32,
+
     quit: bool,
 }
 
@@ -141,6 +146,9 @@ impl App {
             history_total: 0,
             history_loaded: 0,
             loading_more_history: false,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            prompt_count: 0,
             quit: false,
         }
     }
@@ -718,6 +726,22 @@ impl App {
                 );
                 true
             }
+            "/usage" | "/u" => {
+                let total = self.total_input_tokens + self.total_output_tokens;
+                if self.prompt_count == 0 {
+                    self.sys_msg("No usage data yet.".to_string());
+                } else {
+                    self.sys_msg(format!(
+                        "Session usage ({} prompt{}):\n  Input:  {} tokens\n  Output: {} tokens\n  Total:  {} tokens",
+                        self.prompt_count,
+                        if self.prompt_count == 1 { "" } else { "s" },
+                        self.total_input_tokens,
+                        self.total_output_tokens,
+                        total,
+                    ));
+                }
+                true
+            }
             "/reset" => {
                 // Clear local display, then forward to server to clear server-side history
                 self.messages.clear();
@@ -864,6 +888,11 @@ impl App {
     }
 
     pub fn handle_prompt_done(&mut self, _stop_reason: &str, usage: Option<Usage>) {
+        if let Some(ref u) = usage {
+            self.total_input_tokens += u.input_tokens;
+            self.total_output_tokens += u.output_tokens;
+            self.prompt_count += 1;
+        }
         self.flush_pending_response(usage);
         self.status = AgentStatus::Idle;
         self.active_tools.clear();

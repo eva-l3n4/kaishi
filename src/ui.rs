@@ -130,7 +130,17 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         AgentStatus::Error(_) => Style::default().bg(palette::STATUS_BG).fg(palette::ERROR),
     };
 
-    let help = if narrow { " ? " } else { " Esc quit | /help " };
+    let help = if narrow {
+        " ? ".to_string()
+    } else if app.total_input_tokens + app.total_output_tokens > 0 {
+        format!(
+            " {}↑ {}↓ ",
+            format_tokens(app.total_input_tokens),
+            format_tokens(app.total_output_tokens),
+        )
+    } else {
+        " /help ".to_string()
+    };
     let help_display_width = help.width();
     let total_width = area.width as usize;
     let left_max = total_width.saturating_sub(help_display_width);
@@ -850,6 +860,19 @@ fn truncate(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((byte_idx, _)) => &s[..byte_idx],
         None => s,
+    }
+}
+
+/// Format token count as compact string (e.g., 1234 → "1.2k", 12345 → "12k")
+fn format_tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 10_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
     }
 }
 
