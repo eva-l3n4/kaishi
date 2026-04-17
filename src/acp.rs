@@ -328,6 +328,7 @@ impl AcpClient {
         self.request(
             "initialize",
             Some(serde_json::json!({
+                "protocol_version": 1,
                 "client_info": {
                     "name": "hermes-tui",
                     "version": env!("CARGO_PKG_VERSION"),
@@ -376,7 +377,10 @@ impl AcpClient {
         let result = self
             .request(
                 "session/new",
-                Some(serde_json::json!({ "cwd": cwd })),
+                Some(serde_json::json!({
+                    "cwd": cwd,
+                    "mcp_servers": [],
+                })),
             )
             .await?;
         let session_id = result
