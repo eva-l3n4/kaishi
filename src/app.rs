@@ -1032,19 +1032,25 @@ impl App {
         let elapsed = self.animation.turn_start
             .map(|t| t.elapsed().as_secs_f64());
 
-        if let Some(ref u) = usage {
-            self.total_input_tokens += u.input_tokens;
-            self.total_output_tokens += u.output_tokens;
-            self.prompt_count += 1;
-        }
+        // The server sends SESSION-CUMULATIVE token counts (sum of all API calls).
+        // Compute per-turn deltas for display by subtracting previous totals.
+        let turn_usage = usage.map(|mut u| {
+            let turn_in = u.input_tokens.saturating_sub(self.total_input_tokens);
+            let turn_out = u.output_tokens.saturating_sub(self.total_output_tokens);
 
-        // Attach elapsed time to usage
-        let usage_with_elapsed = usage.map(|mut u| {
+            // Update running totals to the new cumulative values
+            self.total_input_tokens = u.input_tokens;
+            self.total_output_tokens = u.output_tokens;
+            self.prompt_count += 1;
+
+            // Overwrite with per-turn deltas for display
+            u.input_tokens = turn_in;
+            u.output_tokens = turn_out;
             u.elapsed_secs = elapsed;
             u
         });
 
-        self.flush_pending_response(usage_with_elapsed);
+        self.flush_pending_response(turn_usage);
         self.status = AgentStatus::Idle;
         self.animation.set_phase(AgentPhase::Idle);
         self.animation.active_tool = None;
