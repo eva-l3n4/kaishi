@@ -60,7 +60,17 @@ impl AcpClient {
         }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit());
+            .stderr({
+                // Log ACP stderr to a file so it doesn't corrupt the TUI
+                let log_dir = dirs::data_local_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("hermes-tui");
+                let _ = std::fs::create_dir_all(&log_dir);
+                let log_path = log_dir.join("acp.log");
+                std::fs::File::create(&log_path)
+                    .map(std::process::Stdio::from)
+                    .unwrap_or_else(|_| std::process::Stdio::null())
+            });
 
         let mut child = cmd.spawn().context("Failed to spawn `hermes acp`")?;
 
