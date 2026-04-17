@@ -421,11 +421,25 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbos
             render_markdown_lines(lines, &msg.content, width, narrow);
             if lines.len() > before {
                 let first = &mut lines[before];
+                // The first line already has indent from render_markdown_lines.
+                // Strip it and replace with the icon prefix (same width).
                 let mut new_spans = vec![Span::styled(
                     format!("  {}", icon),
                     Style::default().fg(icon_color),
                 )];
-                new_spans.extend(first.spans.clone());
+                // Skip the leading indent span (first span is usually the indent)
+                for span in first.spans.iter() {
+                    let trimmed = span.content.trim_start();
+                    if trimmed.is_empty() {
+                        continue; // skip pure-whitespace indent spans
+                    }
+                    if span.content.len() != trimmed.len() {
+                        // This span had leading whitespace — push only the trimmed part
+                        new_spans.push(Span::styled(trimmed.to_string(), span.style));
+                    } else {
+                        new_spans.push(span.clone());
+                    }
+                }
                 *first = Line::from(new_spans);
             } else {
                 lines.push(Line::from(Span::styled(
@@ -454,11 +468,28 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbos
                     format!("  {}", icon),
                     Style::default().fg(icon_color),
                 )];
-                first_spans.extend(parse_inline_spans(content_lines[0]));
+                // Apply a consistent text color for user messages
+                let text_style = match msg.role {
+                    Role::User => Style::default().fg(palette::TEXT),
+                    _ => Style::default(),
+                };
+                for span in parse_inline_spans(content_lines[0]) {
+                    if span.style == Style::default() {
+                        first_spans.push(Span::styled(span.content.to_string(), text_style));
+                    } else {
+                        first_spans.push(span);
+                    }
+                }
                 lines.push(Line::from(first_spans));
                 for &cl in &content_lines[1..] {
                     let mut spans = vec![Span::raw(indent(narrow).to_string())];
-                    spans.extend(parse_inline_spans(cl));
+                    for span in parse_inline_spans(cl) {
+                        if span.style == Style::default() {
+                            spans.push(Span::styled(span.content.to_string(), text_style));
+                        } else {
+                            spans.push(span);
+                        }
+                    }
                     lines.push(Line::from(spans));
                 }
             }
