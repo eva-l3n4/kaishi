@@ -115,9 +115,30 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         AgentStatus::Error(_) => Style::default().bg(Color::Red).fg(Color::White),
     };
 
-    let help = " /help │ Ctrl+C quit ";
-    let left_width = area.width.saturating_sub(help.len() as u16) as usize;
-    let padded_left = format!("{:<width$}", status_text, width = left_width);
+    let help = " /help │ ^C quit ";
+    // Use ratatui constraints to right-align help text instead of byte-padding
+    let help_display_width = unicode_display_width(help);
+    let total_width = area.width as usize;
+    let left_max = total_width.saturating_sub(help_display_width);
+
+    // Truncate status_text to fit, using display width
+    let status_display = if unicode_display_width(&status_text) > left_max {
+        let mut w = 0;
+        let truncated: String = status_text
+            .chars()
+            .take_while(|c| {
+                w += unicode_char_width(*c);
+                w <= left_max
+            })
+            .collect();
+        truncated
+    } else {
+        status_text.clone()
+    };
+
+    // Pad with spaces to fill the left side
+    let pad_needed = left_max.saturating_sub(unicode_display_width(&status_display));
+    let padded_left = format!("{}{}", status_display, " ".repeat(pad_needed));
 
     let bar = Line::from(vec![
         Span::styled(padded_left, style),
@@ -125,6 +146,28 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     ]);
 
     frame.render_widget(Paragraph::new(bar), area);
+}
+
+/// Approximate display width of a string (handles CJK, emoji, ASCII).
+fn unicode_display_width(s: &str) -> usize {
+    s.chars().map(unicode_char_width).sum()
+}
+
+fn unicode_char_width(c: char) -> usize {
+    // CJK, emoji, and wide characters take 2 columns
+    if ('\u{1100}'..='\u{115F}').contains(&c)   // Hangul Jamo
+        || ('\u{2E80}'..='\u{A4CF}').contains(&c)  // CJK
+        || ('\u{AC00}'..='\u{D7A3}').contains(&c)  // Hangul
+        || ('\u{F900}'..='\u{FAFF}').contains(&c)  // CJK compat
+        || ('\u{FE10}'..='\u{FE6F}').contains(&c)  // CJK forms
+        || ('\u{FF01}'..='\u{FF60}').contains(&c)  // Fullwidth
+        || ('\u{FFE0}'..='\u{FFE6}').contains(&c)  // Fullwidth signs
+        || c >= '\u{1F000}' // Emoji and symbols (rough heuristic)
+    {
+        2
+    } else {
+        1
+    }
 }
 
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -630,11 +673,35 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     // Inner width available for text (subtract 2 for borders)
     let inner_width = area.width.saturating_sub(2) as usize;
 
-    // Calculate horizontal scroll to keep cursor visible
+    // For multiline, calculate cursor position on the current line
+    let text_before_cursor = &app.input[..app.cursor];
+    let cursor_row = text_before_cursor.lines().count().saturating_sub(1)
+        + if text_before_cursor.ends_with('\n') {
+            1
+        } else {
+            0
+        };
+    let cursor_col = text_before_cursor
+        .rsplit('\n')
+        .next()
+        .map(|line| line.len())
+        .unwrap_or(app.cursor);
+
+    // Horizontal scroll based on cursor column in current line
     let scroll_x = if inner_width == 0 {
         0
-    } else if app.cursor > inner_width.saturating_sub(1) {
-        (app.cursor - inner_width + 1) as u16
+    } else if cursor_col > inner_width.saturating_sub(1) {
+        (cursor_col - inner_width + 1) as u16
+    } else {
+        0
+    };
+
+    // Vertical scroll to keep cursor visible within input box
+    let inner_height = area.height.saturating_sub(2) as usize; // borders
+    let scroll_y = if inner_height == 0 {
+        0
+    } else if cursor_row >= inner_height {
+        (cursor_row - inner_height + 1) as u16
     } else {
         0
     };
@@ -654,27 +721,24 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let input_paragraph = Paragraph::new(display_text)
         .block(block)
         .style(text_style)
-        .scroll((0, scroll_x));
+        .scroll((scroll_y, scroll_x));
 
     frame.render_widget(input_paragraph, area);
 
-    if app.status == AgentStatus::Idle {
-        // Calculate cursor row and column for multiline input
-        let text_before_cursor = &app.input[..app.cursor];
-        let cursor_row = text_before_cursor.lines().count().saturating_sub(1)
-            + if text_before_cursor.ends_with('\n') { 1 } else { 0 };
-        let cursor_col = text_before_cursor
-            .rsplit('\n')
-            .next()
-            .map(|line| line.len())
-            .unwrap_or(app.cursor);
+    if app.status == AgentStatus::Idle && !app.input.is_empty() {
+        // Cursor position relative to scroll
+        let visible_row = cursor_row - scroll_y as usize;
+        let visible_col = cursor_col.saturating_sub(scroll_x as usize);
 
-        let cursor_x = area.x + 1 + cursor_col as u16;
-        let cursor_y = area.y + 1 + cursor_row as u16;
+        let cursor_x = area.x + 1 + visible_col as u16;
+        let cursor_y = area.y + 1 + visible_row as u16;
         frame.set_cursor_position((
             cursor_x.min(area.x + area.width - 2),
             cursor_y.min(area.y + area.height - 2),
         ));
+    } else if app.status == AgentStatus::Idle {
+        // Empty input — cursor at start
+        frame.set_cursor_position((area.x + 1, area.y + 1));
     }
 }
 
