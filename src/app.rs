@@ -296,9 +296,13 @@ impl App {
                 self.quit = true;
             }
 
-            // Multiline: Shift+Enter or Alt+Enter inserts newline
+            // Multiline: Shift+Enter, Alt+Enter, or Ctrl+J inserts newline
             (KeyModifiers::SHIFT, KeyCode::Enter)
             | (KeyModifiers::ALT, KeyCode::Enter) => {
+                self.input.insert(self.cursor, '\n');
+                self.cursor += 1;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('j')) => {
                 self.input.insert(self.cursor, '\n');
                 self.cursor += 1;
             }
@@ -307,6 +311,12 @@ impl App {
             (_, KeyCode::Enter) if self.status == AgentStatus::Idle => {
                 let text = self.input.trim().replace('\0', "");
                 if text.is_empty() {
+                    return Ok(());
+                }
+
+                // Can't send if session isn't ready yet
+                if self.session_id.is_none() {
+                    self.sys_msg("Session still initializing, please wait…");
                     return Ok(());
                 }
 
