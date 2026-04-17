@@ -12,6 +12,25 @@ use crate::app::{AgentStatus, App, ChatMessage, ModalState, Role, Screen};
 use crate::ui_modal;
 use crate::ui_picker;
 
+// ─── Palette (Claude Code-inspired) ────────────────────────────
+mod palette {
+    use ratatui::style::Color;
+
+    pub const TEXT: Color = Color::White;
+    pub const DIM: Color = Color::DarkGray;
+    pub const ACCENT_USER: Color = Color::Cyan;
+    pub const ACCENT_ASSISTANT: Color = Color::Rgb(180, 140, 255); // soft purple
+    pub const ACCENT_SYSTEM: Color = Color::Yellow;
+    pub const ACCENT_THOUGHT: Color = Color::DarkGray;
+    pub const SUCCESS: Color = Color::Green;
+    pub const ERROR: Color = Color::Red;
+    pub const CODE_FG: Color = Color::Rgb(130, 200, 130); // soft green
+    pub const CODE_BG: Color = Color::Rgb(30, 30, 30);
+    pub const BORDER: Color = Color::Rgb(60, 60, 60); // subtle borders
+    pub const STATUS_BG: Color = Color::Rgb(40, 40, 40); // near-black status bar
+    pub const QUOTE: Color = Color::Rgb(100, 140, 200); // soft blue
+}
+
 /// Spinner frames for the streaming indicator.
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -76,48 +95,41 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let session_hint = if narrow {
-        String::new() // Hide session info on narrow
+        String::new()
     } else if let Some(ref title) = app.session_title {
-        format!(" | {}", truncate(title, 30))
+        format!(" > {}", truncate(title, 30))
     } else if let Some(ref sid) = app.session_id {
         let short = if sid.len() > 8 { &sid[..8] } else { sid };
-        format!(" | {}", short)
+        format!(" > {}", short)
     } else {
         String::new()
     };
 
     let status_text = match &app.status {
         AgentStatus::Idle => {
-            let msg_count = app.messages.iter().filter(|m| m.role == Role::User).count();
-            format!(
-                " 🌸 Hanami | {} | {} msgs{}",
-                model, msg_count, session_hint,
-            )
+            format!(" {}{}", model, session_hint)
         }
         AgentStatus::Thinking => {
             let spinner = SPINNER[(app.tick as usize) % SPINNER.len()];
             let tool_hint = if let Some((_, name)) = app.active_tools.last() {
-                format!(" ({})", name)
+                format!(" {}", name)
             } else {
-                String::new()
+                " thinking…".to_string()
             };
-            format!(
-                " {} thinking…{} | {}{}",
-                spinner, tool_hint, model, session_hint
-            )
+            format!(" {}{}{}", spinner, tool_hint, session_hint)
         }
         AgentStatus::Error(e) => {
-            format!(" ⚠ {} | {}", truncate(e, 40), model)
+            format!(" ⚠ {}", truncate(e, 50))
         }
     };
 
     let style = match &app.status {
-        AgentStatus::Idle => Style::default().bg(Color::DarkGray).fg(Color::White),
-        AgentStatus::Thinking => Style::default().bg(Color::Blue).fg(Color::White),
-        AgentStatus::Error(_) => Style::default().bg(Color::Red).fg(Color::White),
+        AgentStatus::Idle => Style::default().bg(palette::STATUS_BG).fg(palette::DIM),
+        AgentStatus::Thinking => Style::default().bg(palette::STATUS_BG).fg(palette::ACCENT_ASSISTANT),
+        AgentStatus::Error(_) => Style::default().bg(palette::STATUS_BG).fg(palette::ERROR),
     };
 
-    let help = " /help | ^C quit ";
+    let help = if narrow { " ? " } else { " Esc quit | /help " };
     let help_display_width = help.width();
     let total_width = area.width as usize;
     let left_max = total_width.saturating_sub(help_display_width);
@@ -192,22 +204,24 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Render the in-progress streaming response
     if !app.pending_response.is_empty() {
-        let label = Line::from(vec![
-            Span::styled("  ◆ ", Style::default().fg(Color::Magenta)),
-            Span::styled(
-                "(streaming…)",
-                Style::default().fg(Color::DarkGray).italic(),
-            ),
-        ]);
-        all_lines.push(label);
-
+        let before = all_lines.len();
         render_markdown_lines(&mut all_lines, &app.pending_response, inner_width, narrow);
+        // Prepend icon to first rendered line
+        if all_lines.len() > before {
+            let first = &mut all_lines[before];
+            let mut new_spans = vec![Span::styled(
+                "  ◆ ",
+                Style::default().fg(palette::ACCENT_ASSISTANT),
+            )];
+            new_spans.extend(first.spans.clone());
+            *first = Line::from(new_spans);
+        }
 
         // Blinking cursor at end
         if app.tick % 4 < 2 {
             if let Some(last) = all_lines.last_mut() {
                 let mut spans = last.spans.clone();
-                spans.push(Span::styled("█", Style::default().fg(Color::Magenta)));
+                spans.push(Span::styled("█", Style::default().fg(palette::ACCENT_ASSISTANT)));
                 *last = Line::from(spans);
             }
         }
@@ -249,7 +263,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(palette::BORDER))
         .title_bottom(if app.scroll_offset > 0 {
             format!(" ↑ {} lines above ", app.scroll_offset)
         } else {
@@ -316,11 +330,11 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbos
     // Tool messages render as a single compact line with status icon
     if msg.role == Role::Tool {
         let (icon, color) = if msg.content.starts_with('✓') {
-            ("✓", Color::Green)
+            ("✓", palette::SUCCESS)
         } else if msg.content.starts_with('✗') {
-            ("✗", Color::Red)
+            ("✗", palette::ERROR)
         } else {
-            ("⚙", Color::DarkGray)
+            ("⚙", palette::DIM)
         };
 
         let rest = msg.content
@@ -347,7 +361,7 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbos
         if let Some(d) = detail {
             spans.push(Span::styled(
                 d.to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::DIM),
             ));
         }
 
@@ -355,50 +369,97 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbos
         return;
     }
 
-    let (icon, color) = match msg.role {
-        Role::User => ("  ❯ ", Color::Cyan),
-        Role::Assistant => ("  ◆ ", Color::Magenta),
-        Role::System => ("  ● ", Color::Yellow),
+    let (icon, icon_color) = match msg.role {
+        Role::User => ("❯ ", palette::ACCENT_USER),
+        Role::Assistant => ("◆ ", palette::ACCENT_ASSISTANT),
+        Role::System => ("● ", palette::ACCENT_SYSTEM),
         Role::Tool => unreachable!(),
-        Role::Thought => ("  ○ ", Color::DarkGray),
+        Role::Thought => ("○ ", palette::ACCENT_THOUGHT),
     };
 
-    let mut header_spans = vec![
-        Span::styled(icon, Style::default().fg(color)),
-    ];
-
-    if let Some(usage) = &msg.tokens {
-        header_spans.push(Span::styled(
-            format!("[{}→{}]", usage.input_tokens, usage.output_tokens),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-
-    lines.push(Line::from(header_spans));
-
     match msg.role {
-        Role::Assistant => {
-            render_markdown_lines(lines, &msg.content, width, narrow);
-        }
         Role::Thought => {
             if verbose {
-                for text_line in msg.content.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("{}{}", indent(narrow), text_line),
-                        Style::default().fg(Color::DarkGray).italic(),
-                    )));
+                let thought_lines: Vec<&str> = msg.content.lines().collect();
+                if thought_lines.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {}", icon), Style::default().fg(icon_color)),
+                        Span::styled("thinking…", Style::default().fg(Color::DarkGray).italic()),
+                    ]));
+                } else {
+                    // First line gets the icon inline
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {}", icon), Style::default().fg(icon_color)),
+                        Span::styled(
+                            thought_lines[0].to_string(),
+                            Style::default().fg(Color::DarkGray).italic(),
+                        ),
+                    ]));
+                    // Remaining lines indented
+                    for &tl in &thought_lines[1..] {
+                        lines.push(Line::from(Span::styled(
+                            format!("{}{}", indent(narrow), tl),
+                            Style::default().fg(Color::DarkGray).italic(),
+                        )));
+                    }
                 }
             } else {
                 let line_count = msg.content.lines().count();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {}", icon), Style::default().fg(icon_color)),
+                    Span::styled(
+                        format!("({} lines — /verbose to expand)", line_count),
+                        Style::default().fg(Color::DarkGray).italic(),
+                    ),
+                ]));
+            }
+        }
+        Role::Assistant => {
+            // Render markdown; prepend icon to the first line
+            let before = lines.len();
+            render_markdown_lines(lines, &msg.content, width, narrow);
+            if lines.len() > before {
+                let first = &mut lines[before];
+                let mut new_spans = vec![Span::styled(
+                    format!("  {}", icon),
+                    Style::default().fg(icon_color),
+                )];
+                new_spans.extend(first.spans.clone());
+                *first = Line::from(new_spans);
+            } else {
                 lines.push(Line::from(Span::styled(
-                    format!("{}({} lines — /verbose to expand)", indent(narrow), line_count),
-                    Style::default().fg(Color::DarkGray).italic(),
+                    format!("  {}", icon),
+                    Style::default().fg(icon_color),
+                )));
+            }
+            // Token usage on a subtle line at the end
+            if let Some(u) = &msg.tokens {
+                lines.push(Line::from(Span::styled(
+                    format!("{}[{}→{} tokens]", indent(narrow), u.input_tokens, u.output_tokens),
+                    Style::default().fg(Color::DarkGray),
                 )));
             }
         }
         _ => {
-            for text_line in msg.content.lines() {
-                lines.push(Line::from(format!("{}{}", indent(narrow), text_line)));
+            // User and System: inline icon with first content line
+            let content_lines: Vec<&str> = msg.content.lines().collect();
+            if content_lines.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", icon),
+                    Style::default().fg(icon_color),
+                )));
+            } else {
+                let mut first_spans = vec![Span::styled(
+                    format!("  {}", icon),
+                    Style::default().fg(icon_color),
+                )];
+                first_spans.extend(parse_inline_spans(content_lines[0]));
+                lines.push(Line::from(first_spans));
+                for &cl in &content_lines[1..] {
+                    let mut spans = vec![Span::raw(indent(narrow).to_string())];
+                    spans.extend(parse_inline_spans(cl));
+                    lines.push(Line::from(spans));
+                }
             }
         }
     }
@@ -439,7 +500,7 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
         if in_code_block {
             lines.push(Line::from(Span::styled(
                 format!("{}│ {}", indent(narrow), raw_line),
-                Style::default().fg(Color::Green),
+                Style::default().fg(palette::CODE_FG),
             )));
             continue;
         }
@@ -515,11 +576,14 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
         // Blockquotes
         if let Some(quote) = trimmed.strip_prefix("> ") {
             lines.push(Line::from(vec![
-                Span::styled(format!("{}▎ ", indent(narrow)), Style::default().fg(Color::Blue)),
+                Span::styled(
+                    format!("{}▎ ", indent(narrow)),
+                    Style::default().fg(palette::QUOTE),
+                ),
                 Span::styled(
                     quote.to_string(),
                     Style::default()
-                        .fg(Color::Blue)
+                        .fg(palette::QUOTE)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -571,7 +635,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
             if closed {
                 spans.push(Span::styled(
                     code,
-                    Style::default().fg(Color::Green).bg(Color::Rgb(40, 40, 40)),
+                    Style::default().fg(palette::CODE_FG).bg(palette::CODE_BG),
                 ));
             } else {
                 current.push('`');
@@ -670,9 +734,9 @@ fn strip_numbered_prefix(s: &str) -> Option<&str> {
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let prompt_style = if app.status == AgentStatus::Idle {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(palette::ACCENT_USER)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::DIM)
     };
 
     let title = if app.status == AgentStatus::Idle {
@@ -729,9 +793,9 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         &app.input
     };
     let text_style = if app.input.is_empty() && app.status == AgentStatus::Idle {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::DIM)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(palette::TEXT)
     };
 
     let input_paragraph = Paragraph::new(display_text)

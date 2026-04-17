@@ -803,7 +803,7 @@ impl App {
                     .unwrap_or_else(|| {
                         self.messages[msg_idx].content
                             .trim_start_matches(['✓', '✗', '⚙', ' '])
-                            .split(|c: char| c == ' ' || c == '(')
+                            .split([' ', '('])
                             .next()
                             .unwrap_or("")
                             .to_string()
