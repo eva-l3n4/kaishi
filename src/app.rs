@@ -259,6 +259,12 @@ impl App {
                     if let Some(session) = self.sessions.get(idx) {
                         let sid = session.session_id.clone();
                         let _history_len = session.history_len;
+                        self.session_title = session.title.clone();
+                        self.model_name = if session.model.is_empty() {
+                            self.model_name.clone()
+                        } else {
+                            session.model.clone()
+                        };
                         self.screen = Screen::Chat;
                         self.status = AgentStatus::Thinking;
                         self.sys_msg("Resuming session…");
@@ -718,6 +724,13 @@ impl App {
                 self.line_cache.clear();
                 self.scroll_offset = 0;
                 false // fall through to send as prompt — server handles /reset
+            }
+            "/title" => {
+                // Capture title locally for status bar, then forward to server
+                if let Some(title) = parts.get(1) {
+                    self.session_title = Some(title.to_string());
+                }
+                false // fall through to send as prompt — server handles /title
             }
             _ => false,
         }
