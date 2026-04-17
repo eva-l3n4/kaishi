@@ -94,6 +94,19 @@ impl AcpClient {
                     Ok(m) => m,
                     Err(_) => continue,
                 };
+
+                // Debug wire traffic when HERMES_TUI_DEBUG is set
+                if std::env::var("HERMES_TUI_DEBUG").is_ok() {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/hermes-tui-debug.jsonl")
+                    {
+                        let _ = writeln!(f, "{}", line);
+                    }
+                }
+
                 Self::dispatch_message(msg, &pending_clone, &event_tx_clone).await;
             }
             // Subprocess stdout closed — signal error
