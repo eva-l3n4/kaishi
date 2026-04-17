@@ -131,6 +131,16 @@ async fn run(
                 app.sys_msg(format!("ACP error: {}", err));
                 app.status = app::AgentStatus::Idle;
             }
+            event::AppEvent::SessionCreated(sid) => {
+                app.session_id = Some(sid);
+                app.status = app::AgentStatus::Idle;
+                app.sys_msg("Session ready.");
+            }
+            event::AppEvent::SessionResumed(sid) => {
+                app.session_id = Some(sid);
+                app.status = app::AgentStatus::Idle;
+                app.sys_msg("Session resumed.");
+            }
             event::AppEvent::SlashCommandResponse(text) => {
                 app.sys_msg(text);
             }

@@ -184,36 +184,61 @@ impl App {
 
             (_, KeyCode::Enter) => {
                 if self.picker_selected == 0 {
-                    // New session
-                    match acp.new_session(cwd).await {
-                        Ok(sid) => {
-                            self.session_id = Some(sid);
-                            self.screen = Screen::Chat;
+                    // New session — switch to chat immediately, create in background
+                    self.screen = Screen::Chat;
+                    self.status = AgentStatus::Thinking;
+                    self.sys_msg("Creating session…");
+
+                    let acp = Arc::clone(acp);
+                    let cwd = cwd.to_string();
+                    let event_tx = self
+                        .event_tx
+                        .as_ref()
+                        .expect("event_tx must be set")
+                        .clone();
+
+                    tokio::spawn(async move {
+                        match acp.new_session(&cwd).await {
+                            Ok(sid) => {
+                                let _ = event_tx.send(AppEvent::SessionCreated(sid));
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(AppEvent::AcpError(
+                                    format!("Failed to create session: {}", e),
+                                ));
+                            }
                         }
-                        Err(e) => {
-                            self.sys_msg(format!("Failed to create session: {}", e));
-                            self.screen = Screen::Chat;
-                        }
-                    }
+                    });
                 } else {
-                    // Resume existing session
+                    // Resume existing session — switch to chat immediately
                     let idx = self.picker_selected - 1;
                     if let Some(session) = self.sessions.get(idx) {
                         let sid = session.session_id.clone();
-                        match acp.resume_session(cwd, &sid).await {
-                            Ok(()) => {
-                                self.session_id = Some(sid);
-                                self.screen = Screen::Chat;
-                                self.sys_msg(format!(
-                                    "Resumed session ({} messages)",
-                                    session.history_len
-                                ));
+                        let _history_len = session.history_len;
+                        self.screen = Screen::Chat;
+                        self.status = AgentStatus::Thinking;
+                        self.sys_msg("Resuming session…");
+
+                        let acp = Arc::clone(acp);
+                        let cwd = cwd.to_string();
+                        let event_tx = self
+                            .event_tx
+                            .as_ref()
+                            .expect("event_tx must be set")
+                            .clone();
+
+                        tokio::spawn(async move {
+                            match acp.resume_session(&cwd, &sid).await {
+                                Ok(()) => {
+                                    let _ = event_tx.send(AppEvent::SessionResumed(sid));
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(AppEvent::AcpError(
+                                        format!("Failed to resume: {}", e),
+                                    ));
+                                }
                             }
-                            Err(e) => {
-                                self.sys_msg(format!("Failed to resume: {}", e));
-                                self.screen = Screen::Chat;
-                            }
-                        }
+                        });
                     }
                 }
             }
