@@ -66,6 +66,8 @@ pub struct AnimationState {
     pub turn_start: Option<std::time::Instant>,
     /// Stall intensity: 0.0 = normal, 0.5 = warning (yellow), 1.0 = stalled (red).
     pub stall_intensity: f32,
+    /// Label for the current phase (randomly selected on entry).
+    pub phase_label: &'static str,
 }
 
 impl AnimationState {
@@ -82,12 +84,29 @@ impl AnimationState {
             active_tool: None,
             turn_start: None,
             stall_intensity: 0.0,
+            phase_label: "",
         }
     }
 
     /// Transition to a new phase, resetting timers.
     pub fn set_phase(&mut self, phase: AgentPhase) {
         if self.phase != phase {
+            // Pick a label from the word bank based on frame counter (pseudo-random)
+            self.phase_label = match phase {
+                AgentPhase::Thinking => {
+                    const WORDS: &[&str] = &["thinking", "pondering", "reasoning", "considering"];
+                    WORDS[self.frame % WORDS.len()]
+                }
+                AgentPhase::Streaming => {
+                    const WORDS: &[&str] = &["streaming", "composing", "writing", "replying"];
+                    WORDS[self.frame % WORDS.len()]
+                }
+                AgentPhase::Executing => {
+                    const WORDS: &[&str] = &["executing", "running", "working", "processing"];
+                    WORDS[self.frame % WORDS.len()]
+                }
+                AgentPhase::Idle => "",
+            };
             self.phase = phase;
             self.phase_start = std::time::Instant::now();
             self.shimmer_pos = 0;
@@ -264,12 +283,7 @@ impl App {
             self.animation.shimmer_tick += 1;
             if self.animation.shimmer_tick >= 3 {
                 self.animation.shimmer_tick = 0;
-                let label_len = match self.animation.phase {
-                    AgentPhase::Thinking => 8,   // "thinking"
-                    AgentPhase::Streaming => 9,  // "streaming"
-                    AgentPhase::Executing => 9,  // "executing"
-                    AgentPhase::Idle => 1,
-                };
+                let label_len = self.animation.phase_label.len().max(1);
                 self.animation.shimmer_pos = (self.animation.shimmer_pos + 1) % label_len;
             }
         }

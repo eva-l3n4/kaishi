@@ -119,12 +119,10 @@ fn render_spinner_line(app: &App) -> Option<Line<'static>> {
     let bounce = bounce_sequence();
     let glyph = bounce[app.animation.frame % bounce.len()];
 
-    let label = match app.animation.phase {
-        AgentPhase::Thinking => "thinking",
-        AgentPhase::Streaming => "streaming",
-        AgentPhase::Executing => "executing",
-        AgentPhase::Idle => return None,
-    };
+    let label = app.animation.phase_label;
+    if label.is_empty() {
+        return None;
+    }
 
     let elapsed = format_elapsed(app.animation.phase_start.elapsed().as_secs_f64());
 
