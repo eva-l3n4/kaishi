@@ -670,14 +670,6 @@ impl App {
                 }
                 true
             }
-            "/model" => {
-                if self.model_name.is_empty() {
-                    self.sys_msg("Model: (unknown — set via ACP initialize)");
-                } else {
-                    self.sys_msg(format!("Model: {}", self.model_name));
-                }
-                true
-            }
             "/verbose" | "/v" => {
                 self.verbose = !self.verbose;
                 self.line_cache.clear();
@@ -689,22 +681,43 @@ impl App {
             }
             "/help" | "/h" | "/?" => {
                 self.sys_msg(
-                    "Commands:\n\
+                    "Local commands:\n\
                      \n\
                      /new             Start a new session\n\
-                     /model           Show current model\n\
-                     /verbose         Toggle tool call details\n\
                      /clear           Clear the screen\n\
-                     /quit            Exit\n\
+                     /verbose         Toggle tool call details\n\
+                     /usage           Show token usage\n\
+                     /quit            Exit (also Ctrl+D)\n\
                      \n\
-                     Scroll: PgUp/PgDn, Ctrl+U (up 10)\n\
+                     Server commands:\n\
+                     \n\
+                     /model [name]    Show or switch model\n\
+                     /tools           List available tools\n\
+                     /context         Show conversation stats\n\
+                     /compact         Compress conversation context\n\
+                     /reset           Clear conversation history\n\
+                     /title [name]    Set or show session title\n\
+                     /version         Show Hermes version\n\
+                     /yolo            Toggle approval bypass\n\
+                     \n\
+                     Keys:\n\
+                     \n\
+                     Scroll: PgUp/PgDn, mouse wheel\n\
                      Cancel: Ctrl+C during generation\n\
-                     Multiline: Ctrl+J for newline\n\
+                     Newline: Ctrl+J\n\
+                     History: Up/Down arrows\n\
                      \n\
-                     CLI: --profile, --session <id>, --cwd"
+                     Unrecognized /commands are forwarded to the server."
                         .to_string(),
                 );
                 true
+            }
+            "/reset" => {
+                // Clear local display, then forward to server to clear server-side history
+                self.messages.clear();
+                self.line_cache.clear();
+                self.scroll_offset = 0;
+                false // fall through to send as prompt — server handles /reset
             }
             _ => false,
         }
