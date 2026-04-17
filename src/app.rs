@@ -576,9 +576,20 @@ impl App {
                 } = self.modal
                 {
                     if let Some(opt) = options.get(selected) {
-                        let response = serde_json::json!({
-                            "option_id": opt.id,
-                        });
+                        let response = if opt.id == "deny" {
+                            serde_json::json!({
+                                "outcome": {
+                                    "outcome": "rejected",
+                                }
+                            })
+                        } else {
+                            serde_json::json!({
+                                "outcome": {
+                                    "optionId": opt.id,
+                                    "outcome": "selected",
+                                }
+                            })
+                        };
                         let _ = acp.respond(request_id.clone(), response).await;
                         self.sys_msg(format!("Approval: {}", opt.name));
                     }
@@ -593,7 +604,9 @@ impl App {
                 } = self.modal
                 {
                     let response = serde_json::json!({
-                        "option_id": "deny",
+                        "outcome": {
+                            "outcome": "rejected",
+                        }
                     });
                     let _ = acp.respond(request_id.clone(), response).await;
                     self.sys_msg("Approval: Denied");

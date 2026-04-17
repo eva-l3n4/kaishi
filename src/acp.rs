@@ -197,7 +197,7 @@ impl AcpClient {
 
         // Server-to-client request (has method + id)
         if let (Some(method), Some(id)) = (&msg.method, &msg.id) {
-            if method == "request_permission" {
+            if method == "session/request_permission" || method == "request_permission" {
                 Self::handle_permission_request(id.clone(), &msg.params, event_tx);
             }
             return;
@@ -230,7 +230,8 @@ impl AcpClient {
             None => return,
         };
         let command = params
-            .pointer("/tool_call/title")
+            .pointer("/toolCall/title")
+            .or_else(|| params.pointer("/tool_call/title"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown command")
             .to_string();
@@ -241,7 +242,9 @@ impl AcpClient {
                 arr.iter()
                     .filter_map(|o| {
                         Some(ApprovalOption {
-                            id: o.get("option_id")?.as_str()?.to_string(),
+                            id: o.get("optionId")
+                                .or_else(|| o.get("option_id"))?
+                                .as_str()?.to_string(),
                             name: o.get("name")?.as_str()?.to_string(),
                         })
                     })
