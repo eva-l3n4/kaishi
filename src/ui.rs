@@ -6,6 +6,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::app::{AgentStatus, App, ChatMessage, ModalState, Role, Screen};
 use crate::ui_modal;
 use crate::ui_picker;
@@ -76,10 +78,10 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let session_hint = if narrow {
         String::new() // Hide session info on narrow
     } else if let Some(ref title) = app.session_title {
-        format!(" │ {}", truncate(title, 30))
+        format!(" | {}", truncate(title, 30))
     } else if let Some(ref sid) = app.session_id {
         let short = if sid.len() > 8 { &sid[..8] } else { sid };
-        format!(" │ {}", short)
+        format!(" | {}", short)
     } else {
         String::new()
     };
@@ -88,7 +90,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         AgentStatus::Idle => {
             let msg_count = app.messages.iter().filter(|m| m.role == Role::User).count();
             format!(
-                " 🌸 Hanami │ {} │ {} msgs{}",
+                " 🌸 Hanami | {} | {} msgs{}",
                 model, msg_count, session_hint,
             )
         }
@@ -100,12 +102,12 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 String::new()
             };
             format!(
-                " {} thinking…{} │ {}{}",
+                " {} thinking…{} | {}{}",
                 spinner, tool_hint, model, session_hint
             )
         }
         AgentStatus::Error(e) => {
-            format!(" ⚠ {} │ {}", truncate(e, 40), model)
+            format!(" ⚠ {} | {}", truncate(e, 40), model)
         }
     };
 
@@ -115,19 +117,19 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         AgentStatus::Error(_) => Style::default().bg(Color::Red).fg(Color::White),
     };
 
-    let help = " /help │ ^C quit ";
-    // Use ratatui constraints to right-align help text instead of byte-padding
-    let help_display_width = unicode_display_width(help);
+    let help = " /help | ^C quit ";
+    let help_display_width = help.width();
     let total_width = area.width as usize;
     let left_max = total_width.saturating_sub(help_display_width);
 
     // Truncate status_text to fit, using display width
-    let status_display = if unicode_display_width(&status_text) > left_max {
+    let status_display = if status_text.width() > left_max {
         let mut w = 0;
         let truncated: String = status_text
             .chars()
             .take_while(|c| {
-                w += unicode_char_width(*c);
+                let cw = c.to_string().width();
+                w += cw;
                 w <= left_max
             })
             .collect();
@@ -137,7 +139,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Pad with spaces to fill the left side
-    let pad_needed = left_max.saturating_sub(unicode_display_width(&status_display));
+    let pad_needed = left_max.saturating_sub(status_display.width());
     let padded_left = format!("{}{}", status_display, " ".repeat(pad_needed));
 
     let bar = Line::from(vec![
@@ -146,28 +148,6 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     ]);
 
     frame.render_widget(Paragraph::new(bar), area);
-}
-
-/// Approximate display width of a string (handles CJK, emoji, ASCII).
-fn unicode_display_width(s: &str) -> usize {
-    s.chars().map(unicode_char_width).sum()
-}
-
-fn unicode_char_width(c: char) -> usize {
-    // CJK, emoji, and wide characters take 2 columns
-    if ('\u{1100}'..='\u{115F}').contains(&c)   // Hangul Jamo
-        || ('\u{2E80}'..='\u{A4CF}').contains(&c)  // CJK
-        || ('\u{AC00}'..='\u{D7A3}').contains(&c)  // Hangul
-        || ('\u{F900}'..='\u{FAFF}').contains(&c)  // CJK compat
-        || ('\u{FE10}'..='\u{FE6F}').contains(&c)  // CJK forms
-        || ('\u{FF01}'..='\u{FF60}').contains(&c)  // Fullwidth
-        || ('\u{FFE0}'..='\u{FFE6}').contains(&c)  // Fullwidth signs
-        || c >= '\u{1F000}' // Emoji and symbols (rough heuristic)
-    {
-        2
-    } else {
-        1
-    }
 }
 
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
