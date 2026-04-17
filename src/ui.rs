@@ -12,23 +12,24 @@ use crate::app::{AgentStatus, App, ChatMessage, ModalState, Role, Screen};
 use crate::ui_modal;
 use crate::ui_picker;
 
-// ─── Palette (Claude Code-inspired) ────────────────────────────
+// ─── Palette (terminal-native — inherits from your theme) ──────
 mod palette {
     use ratatui::style::Color;
 
     pub const TEXT: Color = Color::White;
     pub const DIM: Color = Color::DarkGray;
     pub const ACCENT_USER: Color = Color::Cyan;
-    pub const ACCENT_ASSISTANT: Color = Color::Rgb(180, 140, 255); // soft purple
+    pub const ACCENT_ASSISTANT: Color = Color::Magenta;
     pub const ACCENT_SYSTEM: Color = Color::Yellow;
     pub const ACCENT_THOUGHT: Color = Color::DarkGray;
     pub const SUCCESS: Color = Color::Green;
     pub const ERROR: Color = Color::Red;
-    pub const CODE_FG: Color = Color::Rgb(130, 200, 130); // soft green
-    pub const CODE_BG: Color = Color::Rgb(30, 30, 30);
-    pub const BORDER: Color = Color::Rgb(60, 60, 60); // subtle borders
-    pub const STATUS_BG: Color = Color::Rgb(40, 40, 40); // near-black status bar
-    pub const QUOTE: Color = Color::Rgb(100, 140, 200); // soft blue
+    pub const CODE_FG: Color = Color::Green;
+    pub const CODE_BG: Color = Color::Reset; // inherit terminal bg
+    pub const BORDER: Color = Color::DarkGray;
+    pub const STATUS_BG: Color = Color::DarkGray;
+    pub const STATUS_FG: Color = Color::White;
+    pub const QUOTE: Color = Color::Blue;
 }
 
 /// Spinner frames for the streaming indicator.
@@ -124,7 +125,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let style = match &app.status {
-        AgentStatus::Idle => Style::default().bg(palette::STATUS_BG).fg(palette::DIM),
+        AgentStatus::Idle => Style::default().bg(palette::STATUS_BG).fg(palette::STATUS_FG),
         AgentStatus::Thinking => Style::default().bg(palette::STATUS_BG).fg(palette::ACCENT_ASSISTANT),
         AgentStatus::Error(_) => Style::default().bg(palette::STATUS_BG).fg(palette::ERROR),
     };

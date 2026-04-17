@@ -305,8 +305,15 @@ impl AcpClient {
                 let input = params
                     .get("rawInput")
                     .or_else(|| params.get("raw_input"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                    .map(|v| {
+                        // rawInput can be a string or a JSON object
+                        if let Some(s) = v.as_str() {
+                            s.to_string()
+                        } else {
+                            // Compact JSON for objects/arrays
+                            serde_json::to_string(v).unwrap_or_default()
+                        }
+                    });
                 let _ = event_tx.send(AppEvent::ToolCallStart { id, name, kind, input });
             }
             "tool_call_update" => {
