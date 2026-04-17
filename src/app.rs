@@ -245,7 +245,7 @@ impl App {
 
             // Submit message
             (_, KeyCode::Enter) if self.status == AgentStatus::Idle => {
-                let text = self.input.trim().to_string();
+                let text = self.input.trim().replace('\0', "");
                 if text.is_empty() {
                     return Ok(());
                 }

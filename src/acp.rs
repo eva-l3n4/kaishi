@@ -60,7 +60,7 @@ impl AcpClient {
         }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
+            .stderr(std::process::Stdio::inherit());
 
         let mut child = cmd.spawn().context("Failed to spawn `hermes acp`")?;
 
@@ -76,7 +76,7 @@ impl AcpClient {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let line = line.trim().to_string();
+                let line = line.replace('\0', "").trim().to_string();
                 if line.is_empty() {
                     continue;
                 }
@@ -175,7 +175,7 @@ impl AcpClient {
                     let mut pending = pending.lock().await;
                     if let Some(tx) = pending.remove(&id_num) {
                         if let Some(err) = msg.error {
-                            let _ = tx.send(Err(anyhow::anyhow!("RPC error: {}", err)));
+                            let _ = tx.send(Err(anyhow::anyhow!("RPC error: {}", serde_json::to_string_pretty(&err).unwrap_or_else(|_| err.to_string()))));
                         } else {
                             let _ = tx.send(Ok(msg.result.unwrap_or(Value::Null)));
                         }

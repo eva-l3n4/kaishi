@@ -54,8 +54,8 @@ async fn main() -> Result<()> {
     // Extract model name from init result
     if let Ok(ref init) = init_result {
         if let Some(model) = init
-            .get("server_info")
-            .and_then(|s| s.get("model"))
+            .get("agent_info")
+            .and_then(|s| s.get("name"))
             .and_then(|m| m.as_str())
         {
             app.model_name = model.to_string();
