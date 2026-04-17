@@ -182,7 +182,7 @@ impl App {
             session_id: None,
             messages: vec![ChatMessage {
                 role: Role::System,
-                content: "Welcome to 🌸 Hanami. Type a message or /help for commands."
+                content: "Welcome to 懐紙 Kaishi. Type a message or /help for commands."
                     .into(),
                 tokens: None,
             }],

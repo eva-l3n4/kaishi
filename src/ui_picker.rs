@@ -46,7 +46,7 @@ fn draw_header(frame: &mut Frame, area: Rect) {
     let title = Line::from(vec![
         Span::styled(" 🌸 ", Style::default()),
         Span::styled(
-            "Hanami",
+            "懐紙 Kaishi",
             Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),

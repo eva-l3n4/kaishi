@@ -1,8 +1,12 @@
 [package]
-name = "hermes-tui"
-version = "0.4.0"
+name = "kaishi"
+version = "0.5.0"
 edition = "2021"
-description = "Terminal UI for Hermes Agent"
+description = "懐紙 Kaishi — Terminal UI for Hermes Agent"
+
+[[bin]]
+name = "kaishi"
+path = "src/main.rs"
 
 [dependencies]
 # TUI framework

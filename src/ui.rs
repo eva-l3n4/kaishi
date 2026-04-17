@@ -216,7 +216,7 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let narrow = area.width < 60;
     let model = if app.model_name.is_empty() {
-        "hermes"
+        "kaishi"
     } else {
         &app.model_name
     };
