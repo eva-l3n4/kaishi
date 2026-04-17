@@ -77,6 +77,9 @@ pub enum AppEvent {
     HistoryLoaded(Vec<(String, String)>),
     HistoryFallback(String),
 
+    // Reconnect
+    ReconnectRequested,
+
     // Slash command responses from ACP server
     SlashCommandResponse(String),
 }

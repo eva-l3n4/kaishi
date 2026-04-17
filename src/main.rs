@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
         let _ = event_tx_init.send(event::AppEvent::AcpReady);
     });
 
-    let result = run(&mut terminal, &mut app, &mut events, acp.clone(), &cli.cwd).await;
+    let result = run(&mut terminal, &mut app, &mut events, acp.clone(), &cli.cwd, cli.profile.as_deref()).await;
 
     // Cleanup
     acp.shutdown().await;
@@ -177,8 +177,9 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     events: &mut EventLoop,
-    acp: Arc<acp::AcpClient>,
+    mut acp: Arc<acp::AcpClient>,
     cwd: &str,
+    profile: Option<&str>,
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| ui::draw(frame, app))?;
@@ -223,8 +224,14 @@ async fn run(
                 app.show_approval_modal(request_id, command, options);
             }
             event::AppEvent::AcpError(err) => {
-                app.sys_msg(format!("ACP error: {}", err));
-                app.status = app::AgentStatus::Idle;
+                if err.contains("subprocess exited") || err.contains("ACP subprocess") {
+                    // ACP process died — show disconnected screen
+                    app.screen = app::Screen::Disconnected(err);
+                    app.status = app::AgentStatus::Idle;
+                } else {
+                    app.sys_msg(format!("ACP error: {}", err));
+                    app.status = app::AgentStatus::Idle;
+                }
             }
             event::AppEvent::SessionCreated(sid) => {
                 app.session_id = Some(sid);
@@ -286,6 +293,54 @@ async fn run(
                     app.model_name = model.to_string();
                 } else {
                     app.sys_msg(text);
+                }
+            }
+            event::AppEvent::ReconnectRequested => {
+                // Respawn the ACP subprocess
+                app.sys_msg("Reconnecting…");
+                app.screen = app::Screen::Picker;
+                app.sessions.clear();
+                app.session_id = None;
+                app.messages.clear();
+                app.messages.push(app::ChatMessage {
+                    role: app::Role::System,
+                    content: "Reconnecting to Hermes…".into(),
+                    tokens: None,
+                });
+                app.status = app::AgentStatus::Idle;
+                app.picker_selected = 0;
+
+                let event_tx = events.sender();
+                match acp::AcpClient::spawn(event_tx.clone(), profile).await {
+                    Ok(new_client) => {
+                        acp = Arc::new(new_client);
+                        // Re-initialize
+                        let acp_init = Arc::clone(&acp);
+                        let event_tx_init = event_tx.clone();
+                        tokio::spawn(async move {
+                            if let Ok(init) = acp_init.initialize().await {
+                                if let Some(model) = init
+                                    .get("agentInfo")
+                                    .or_else(|| init.get("agent_info"))
+                                    .and_then(|s| s.get("name"))
+                                    .and_then(|m| m.as_str())
+                                {
+                                    let _ = event_tx_init.send(event::AppEvent::SlashCommandResponse(
+                                        format!("__model_name:{}", model),
+                                    ));
+                                }
+                            }
+                            if let Ok(sessions) = acp_init.list_sessions().await {
+                                let _ = event_tx_init.send(event::AppEvent::SessionsLoaded(sessions));
+                            }
+                            let _ = event_tx_init.send(event::AppEvent::AcpReady);
+                        });
+                    }
+                    Err(e) => {
+                        app.screen = app::Screen::Disconnected(
+                            format!("Failed to restart: {}", e),
+                        );
+                    }
                 }
             }
         }

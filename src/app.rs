@@ -38,6 +38,7 @@ pub enum AgentStatus {
 pub enum Screen {
     Picker,
     Chat,
+    Disconnected(String), // error message
 }
 
 /// Modal overlay state.
@@ -160,6 +161,23 @@ impl App {
         match self.screen {
             Screen::Picker => self.handle_picker_key(key, acp, cwd).await,
             Screen::Chat => self.handle_chat_key(key, acp, cwd).await,
+            Screen::Disconnected(_) => {
+                // Any key quits from disconnected state
+                match (key.modifiers, key.code) {
+                    (_, KeyCode::Esc)
+                    | (KeyModifiers::CONTROL, KeyCode::Char('c'))
+                    | (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                        self.quit = true;
+                    }
+                    _ => {
+                        // Signal reconnect request
+                        if let Some(tx) = &self.event_tx {
+                            let _ = tx.send(AppEvent::ReconnectRequested);
+                        }
+                    }
+                }
+                Ok(())
+            }
         }
     }
 

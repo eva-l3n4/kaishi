@@ -18,12 +18,15 @@ const INDENT: &str = "    ";
 
 /// Top-level draw — dispatches to the active screen, then overlays modal.
 pub fn draw(frame: &mut Frame, app: &App) {
-    match app.screen {
+    match &app.screen {
         Screen::Picker => {
             ui_picker::draw_picker(frame, &app.sessions, app.picker_selected);
         }
         Screen::Chat => {
             draw_chat(frame, app);
+        }
+        Screen::Disconnected(err) => {
+            draw_disconnected(frame, err);
         }
     }
 
@@ -603,4 +606,42 @@ fn truncate(s: &str, max: usize) -> &str {
     } else {
         &s[..max]
     }
+}
+
+/// Draw the disconnected / error screen.
+fn draw_disconnected(frame: &mut Frame, error: &str) {
+    let area = frame.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .title(" 🌸 Hanami — Disconnected ");
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "    ⚠ ACP Connection Lost",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("    {}", error),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "    Press Enter to reconnect, Esc to quit",
+            Style::default().fg(Color::White),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
 }
