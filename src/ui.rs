@@ -66,6 +66,50 @@ fn format_elapsed(secs: f64) -> String {
     }
 }
 
+/// Format token count with comma separators.
+fn format_tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{},{:03}", n / 1_000, n % 1_000)
+    } else {
+        format!("{},{:03},{:03}", n / 1_000_000, (n / 1_000) % 1_000, n % 1_000)
+    }
+}
+
+/// Render a turn completion summary as a dim divider line.
+fn render_turn_summary(usage: &Usage, width: usize) -> Line<'static> {
+    let in_tok = format_tokens(usage.input_tokens);
+    let out_tok = format_tokens(usage.output_tokens);
+    let elapsed = usage.elapsed_secs
+        .map(|s| format_elapsed(s))
+        .unwrap_or_default();
+
+    let content = if elapsed.is_empty() {
+        format!("{} in · {} out", in_tok, out_tok)
+    } else {
+        format!("{} in · {} out · {}", in_tok, out_tok, elapsed)
+    };
+
+    // Center with ── dashes
+    let content_width = content.len() + 2; // spaces around content
+    let available = width.min(60); // cap divider width
+    let dash_total = available.saturating_sub(content_width + 4); // 4 = "──" on each side
+    let left_dashes = dash_total / 2;
+    let right_dashes = dash_total.saturating_sub(left_dashes);
+
+    let line_str = format!(
+        "  {}── {} ──{}",
+        "─".repeat(left_dashes),
+        content,
+        "─".repeat(right_dashes),
+    );
+
+    Line::from(Span::styled(line_str, Style::default().fg(Color::DarkGray)))
+}
+
+use crate::event::Usage;
+
 /// Render the animated spinner line (thinking/streaming/executing).
 fn render_spinner_line(app: &App) -> Option<Line<'static>> {
     use crate::app::AgentPhase;
@@ -718,12 +762,9 @@ fn render_message(
                     Style::default().fg(icon_color),
                 )));
             }
-            // Token usage on a subtle line at the end
+            // Turn completion summary as dim divider
             if let Some(u) = &msg.tokens {
-                lines.push(Line::from(Span::styled(
-                    format!("{}[{}→{} tokens]", indent(narrow), u.input_tokens, u.output_tokens),
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(render_turn_summary(u, width));
             }
         }
         _ => {
@@ -1113,19 +1154,6 @@ fn truncate(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((byte_idx, _)) => &s[..byte_idx],
         None => s,
-    }
-}
-
-/// Format token count as compact string (e.g., 1234 → "1.2k", 12345 → "12k")
-fn format_tokens(n: u64) -> String {
-    if n < 1_000 {
-        n.to_string()
-    } else if n < 10_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
-    } else if n < 1_000_000 {
-        format!("{}k", n / 1_000)
-    } else {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
     }
 }
 
