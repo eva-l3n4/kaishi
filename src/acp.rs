@@ -384,15 +384,62 @@ impl AcpClient {
                                 .to_string(),
                             history_len: s
                                 .get("history_len")
+                                .or_else(|| s.get("historyLen"))
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0)
                                 as usize,
+                            title: s
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            started_at: s
+                                .get("started_at")
+                                .or_else(|| s.get("startedAt"))
+                                .and_then(|v| v.as_f64()),
+                            last_active: s
+                                .get("last_active")
+                                .or_else(|| s.get("lastActive"))
+                                .and_then(|v| v.as_f64()),
+                            source: s
+                                .get("source")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
                         })
                     })
                     .collect()
             })
             .unwrap_or_default();
         Ok(sessions)
+    }
+
+    pub async fn get_session_history(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let result = self
+            .request(
+                "hermes/get_session_history",
+                Some(serde_json::json!({
+                    "session_id": session_id,
+                    "limit": limit,
+                })),
+            )
+            .await?;
+        let messages = result
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let role = m.get("role")?.as_str()?.to_string();
+                        let content = m.get("content")?.as_str()?.to_string();
+                        Some((role, content))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(messages)
     }
 
     pub async fn new_session(&self, cwd: &str) -> Result<String> {

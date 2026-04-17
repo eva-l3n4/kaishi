@@ -25,11 +25,10 @@ pub struct SessionInfo {
     pub cwd: String,
     pub model: String,
     pub history_len: usize,
-    // Future upstream enrichment:
-    // pub title: Option<String>,
-    // pub started_at: Option<f64>,
-    // pub last_active: Option<f64>,
-    // pub source: Option<String>,
+    pub title: Option<String>,
+    pub started_at: Option<f64>,
+    pub last_active: Option<f64>,
+    pub source: Option<String>,
 }
 
 /// Events the UI loop cares about.
@@ -73,6 +72,10 @@ pub enum AppEvent {
     SessionsLoaded(Vec<SessionInfo>),
     SessionCreated(String),
     SessionResumed(String),
+
+    // History replay
+    HistoryLoaded(Vec<(String, String)>),
+    HistoryFallback(String),
 
     // Slash command responses from ACP server
     SlashCommandResponse(String),

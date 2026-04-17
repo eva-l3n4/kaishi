@@ -17,13 +17,64 @@ use ratatui::prelude::*;
 use std::io;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Parse args
-    let profile = std::env::var("HERMES_PROFILE").ok();
-    let cwd = std::env::current_dir()
+/// CLI argument parsing (no dependency needed for this).
+struct CliArgs {
+    profile: Option<String>,
+    cwd: String,
+    session: Option<String>,
+}
+
+fn parse_args() -> CliArgs {
+    let mut args = std::env::args().skip(1);
+    let mut profile: Option<String> = std::env::var("HERMES_PROFILE").ok();
+    let mut cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
+    let mut session: Option<String> = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--profile" | "-p" => {
+                profile = args.next();
+            }
+            "--cwd" | "-C" => {
+                if let Some(val) = args.next() {
+                    cwd = val;
+                }
+            }
+            "--session" | "-s" => {
+                session = args.next();
+            }
+            "--help" | "-h" => {
+                eprintln!(
+                    "hermes-tui {}\n\n\
+                     Usage: hermes-tui [OPTIONS]\n\n\
+                     Options:\n  \
+                       --profile, -p <name>   Hermes profile to use (env: HERMES_PROFILE)\n  \
+                       --cwd, -C <path>       Working directory for sessions\n  \
+                       --session, -s <id>     Resume a session directly (skip picker)\n  \
+                       --help, -h             Show this help",
+                    env!("CARGO_PKG_VERSION")
+                );
+                std::process::exit(0);
+            }
+            _ => {
+                eprintln!("Unknown argument: {}. Use --help for usage.", arg);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    CliArgs {
+        profile,
+        cwd,
+        session,
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = parse_args();
 
     // Terminal setup
     enable_raw_mode()?;
@@ -37,15 +88,25 @@ async fn main() -> Result<()> {
     let mut events = EventLoop::new(250);
     let event_tx = events.sender();
 
-    let acp = Arc::new(acp::AcpClient::spawn(event_tx.clone(), profile.as_deref()).await?);
+    let acp = Arc::new(acp::AcpClient::spawn(event_tx.clone(), cli.profile.as_deref()).await?);
 
     // Create app immediately — show picker with "Connecting..." while ACP initializes
     let mut app = App::new(vec![]);
     app.event_tx = Some(event_tx.clone());
 
+    // If --session was provided, skip picker and go straight to chat
+    let direct_session = cli.session.clone();
+    if direct_session.is_some() {
+        app.screen = app::Screen::Chat;
+        app.status = app::AgentStatus::Thinking;
+        app.sys_msg("Resuming session…");
+    }
+
     // Initialize ACP + fetch sessions in background
     let acp_init = Arc::clone(&acp);
     let event_tx_init = event_tx.clone();
+    let direct_sid = direct_session.clone();
+    let direct_cwd = cli.cwd.clone();
     tokio::spawn(async move {
         // Initialize handshake
         match acp_init.initialize().await {
@@ -68,22 +129,36 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Fetch sessions for the picker
-        match acp_init.list_sessions().await {
-            Ok(sessions) => {
-                let _ = event_tx_init.send(event::AppEvent::SessionsLoaded(sessions));
+        // If direct session requested, resume it immediately
+        if let Some(sid) = direct_sid {
+            match acp_init.resume_session(&direct_cwd, &sid).await {
+                Ok(()) => {
+                    let _ = event_tx_init.send(event::AppEvent::SessionResumed(sid));
+                }
+                Err(e) => {
+                    let _ = event_tx_init.send(event::AppEvent::AcpError(
+                        format!("Failed to resume session: {}", e),
+                    ));
+                }
             }
-            Err(e) => {
-                let _ = event_tx_init.send(event::AppEvent::AcpError(
-                    format!("Failed to list sessions: {}", e),
-                ));
+        } else {
+            // Fetch sessions for the picker
+            match acp_init.list_sessions().await {
+                Ok(sessions) => {
+                    let _ = event_tx_init.send(event::AppEvent::SessionsLoaded(sessions));
+                }
+                Err(e) => {
+                    let _ = event_tx_init.send(event::AppEvent::AcpError(
+                        format!("Failed to list sessions: {}", e),
+                    ));
+                }
             }
         }
 
         let _ = event_tx_init.send(event::AppEvent::AcpReady);
     });
 
-    let result = run(&mut terminal, &mut app, &mut events, acp.clone(), &cwd).await;
+    let result = run(&mut terminal, &mut app, &mut events, acp.clone(), &cli.cwd).await;
 
     // Cleanup
     acp.shutdown().await;
@@ -158,10 +233,31 @@ async fn run(
             }
             event::AppEvent::SessionResumed(sid) => {
                 app.session_id = Some(sid.clone());
-                app.status = app::AgentStatus::Idle;
-                app.sys_msg("Session resumed. Fetching context…");
+                app.sys_msg("Session resumed. Loading history…");
 
-                // Auto-send /context to show the user what the agent remembers
+                // Fetch session history via the extension method (replaces /context hack)
+                let acp_hist = acp.clone();
+                let event_tx_hist = app.event_tx.as_ref().unwrap().clone();
+                tokio::spawn(async move {
+                    match acp_hist.get_session_history(&sid, 50).await {
+                        Ok(messages) => {
+                            let _ = event_tx_hist
+                                .send(event::AppEvent::HistoryLoaded(messages));
+                        }
+                        Err(_) => {
+                            // Extension method not available — fallback to /context
+                            let _ = event_tx_hist.send(event::AppEvent::HistoryFallback(sid));
+                        }
+                    }
+                });
+            }
+            event::AppEvent::HistoryLoaded(messages) => {
+                app.load_history(messages);
+                app.status = app::AgentStatus::Idle;
+            }
+            event::AppEvent::HistoryFallback(sid) => {
+                // Fallback: send /context like before
+                app.sys_msg("History unavailable, fetching context…");
                 let acp_ctx = acp.clone();
                 let event_tx_ctx = app.event_tx.as_ref().unwrap().clone();
                 tokio::spawn(async move {

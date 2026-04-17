@@ -646,7 +646,10 @@ impl App {
                      /quit            Exit\n\
                      \n\
                      Scroll: PgUp/PgDn, Ctrl+U (up 10)\n\
-                     Cancel: Ctrl+C during generation"
+                     Cancel: Ctrl+C during generation\n\
+                     Multiline: Ctrl+J for newline\n\
+                     \n\
+                     CLI: --profile, --session <id>, --cwd"
                         .to_string(),
                 );
                 true
@@ -743,5 +746,34 @@ impl App {
         } else {
             self.scroll_offset = self.scroll_offset.saturating_sub((-delta) as u16);
         }
+    }
+
+    /// Load conversation history from the server into the messages list.
+    pub fn load_history(&mut self, history: Vec<(String, String)>) {
+        // Clear the welcome message and "resuming" messages
+        self.messages.clear();
+
+        for (role, content) in history {
+            let msg_role = match role.as_str() {
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                "system" => Role::System,
+                "tool" => Role::Tool,
+                _ => Role::System,
+            };
+            self.messages.push(ChatMessage {
+                role: msg_role,
+                content,
+                tokens: None,
+            });
+        }
+
+        if self.messages.is_empty() {
+            self.sys_msg("Session resumed (no history).");
+        } else {
+            let count = self.messages.len();
+            self.sys_msg(format!("Loaded {} messages from history.", count));
+        }
+        self.scroll_offset = 0;
     }
 }
