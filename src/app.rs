@@ -129,6 +129,7 @@ pub struct App {
 
     // Active session
     pub session_id: Option<String>,
+    pub cwd: String,
 
     // Chat
     pub messages: Vec<ChatMessage>,
@@ -185,6 +186,7 @@ impl App {
             picker_selected: 0,
             picker_scroll_offset: 0,
             session_id: None,
+            cwd: String::new(),
             messages: vec![ChatMessage {
                 role: Role::System,
                 content: "Welcome to 懐紙 Kaishi. Type a message or /help for commands."

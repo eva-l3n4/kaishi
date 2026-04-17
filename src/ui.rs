@@ -227,86 +227,90 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let narrow = area.width < 60;
+    let total_width = area.width as usize;
+    let bg = palette::STATUS_BG;
+
+    // ── Left side: model + status ──
     let model = if app.model_name.is_empty() {
         "kaishi"
     } else {
         &app.model_name
     };
 
-    let session_hint = if narrow {
-        String::new()
-    } else if let Some(ref title) = app.session_title {
-        format!(" > {}", truncate(title, 30))
-    } else if let Some(ref sid) = app.session_id {
-        let short = if sid.len() > 8 { &sid[..8] } else { sid };
-        format!(" > {}", short)
-    } else {
-        String::new()
-    };
+    let mut left_spans: Vec<Span> = vec![
+        Span::styled(format!(" {} ", model), Style::default().bg(bg).fg(palette::STATUS_FG)),
+    ];
 
-    let status_text = match &app.status {
-        AgentStatus::Idle => {
-            format!(" {}{}", model, session_hint)
-        }
+    // Activity hint
+    match &app.status {
         AgentStatus::Thinking => {
-            if let Some(ref tool_name) = app.animation.active_tool {
-                format!(" {} > {}", model, tool_name)
+            let hint = if let Some(ref tool_name) = app.animation.active_tool {
+                format!("│ {} ", tool_name)
             } else {
-                format!(" {} > working…", model)
-            }
+                "│ working… ".to_string()
+            };
+            left_spans.push(Span::styled(hint, Style::default().bg(bg).fg(palette::ACCENT_ASSISTANT)));
         }
         AgentStatus::Error(e) => {
-            format!(" ⚠ {}", truncate(e, 50))
+            left_spans.push(Span::styled(
+                format!("│ ⚠ {} ", truncate(e, 30)),
+                Style::default().bg(bg).fg(palette::ERROR),
+            ));
         }
-    };
+        AgentStatus::Idle => {}
+    }
 
-    let style = match &app.status {
-        AgentStatus::Idle => Style::default().bg(palette::STATUS_BG).fg(palette::STATUS_FG),
-        AgentStatus::Thinking => Style::default().bg(palette::STATUS_BG).fg(palette::ACCENT_ASSISTANT),
-        AgentStatus::Error(_) => Style::default().bg(palette::STATUS_BG).fg(palette::ERROR),
-    };
+    // ── Right side: tokens + cwd ──
+    let mut right_parts: Vec<String> = Vec::new();
 
-    let help = if narrow {
-        " ? ".to_string()
-    } else if app.total_input_tokens + app.total_output_tokens > 0 {
-        format!(
-            " {}↑ {}↓ ",
+    // Token totals (session cumulative)
+    if !narrow && (app.total_input_tokens + app.total_output_tokens > 0) {
+        right_parts.push(format!(
+            "{}↑ {}↓",
             format_tokens(app.total_input_tokens),
             format_tokens(app.total_output_tokens),
-        )
+        ));
+    }
+
+    // CWD — shortened with ~
+    if !narrow && !app.cwd.is_empty() {
+        let home = dirs::home_dir()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let display_cwd = if !home.is_empty() && app.cwd.starts_with(&home) {
+            format!("~{}", &app.cwd[home.len()..])
+        } else {
+            app.cwd.clone()
+        };
+        // Truncate long paths
+        let max_cwd = 25;
+        let short_cwd = if display_cwd.len() > max_cwd {
+            format!("…{}", &display_cwd[display_cwd.len() - max_cwd + 1..])
+        } else {
+            display_cwd
+        };
+        right_parts.push(short_cwd);
+    }
+
+    let right_text = if right_parts.is_empty() {
+        if narrow { " ? ".to_string() } else { " /help ".to_string() }
     } else {
-        " /help ".to_string()
-    };
-    let help_display_width = help.width();
-    let total_width = area.width as usize;
-    let left_max = total_width.saturating_sub(help_display_width);
-
-    // Truncate status_text to fit, using display width
-    let status_display = if status_text.width() > left_max {
-        let mut w = 0;
-        let truncated: String = status_text
-            .chars()
-            .take_while(|c| {
-                let cw = c.to_string().width();
-                w += cw;
-                w <= left_max
-            })
-            .collect();
-        truncated
-    } else {
-        status_text.clone()
+        format!(" {} ", right_parts.join(" │ "))
     };
 
-    // Pad with spaces to fill the left side
-    let pad_needed = left_max.saturating_sub(status_display.width());
-    let padded_left = format!("{}{}", status_display, " ".repeat(pad_needed));
+    // ── Layout: fill middle with spaces ──
+    let left_width: usize = left_spans.iter().map(|s| s.content.width()).sum();
+    let right_width = right_text.width();
+    let pad = total_width.saturating_sub(left_width + right_width);
 
-    let bar = Line::from(vec![
-        Span::styled(padded_left, style),
-        Span::styled(help, style.add_modifier(Modifier::DIM)),
-    ]);
+    let mut spans = left_spans;
+    spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+    spans.push(Span::styled(
+        right_text,
+        Style::default().bg(bg).fg(Color::DarkGray),
+    ));
 
-    frame.render_widget(Paragraph::new(bar), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {

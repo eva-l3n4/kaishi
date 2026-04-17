@@ -93,6 +93,7 @@ async fn main() -> Result<()> {
     // Create app immediately — show picker with "Connecting..." while ACP initializes
     let mut app = App::new(vec![]);
     app.event_tx = Some(event_tx.clone());
+    app.cwd = cli.cwd.clone();
 
     // If --session was provided, skip picker and go straight to chat
     let direct_session = cli.session.clone();
