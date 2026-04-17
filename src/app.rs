@@ -98,6 +98,11 @@ pub struct App {
     pub line_cache: Vec<Vec<RatLine<'static>>>,
     pub cache_width: usize,
 
+    // History pagination
+    pub history_total: usize,
+    pub history_loaded: usize,
+    pub loading_more_history: bool,
+
     quit: bool,
 }
 
@@ -133,6 +138,9 @@ impl App {
             saved_input: String::new(),
             line_cache: Vec::new(),
             cache_width: 0,
+            history_total: 0,
+            history_loaded: 0,
+            loading_more_history: false,
             quit: false,
         }
     }
@@ -816,39 +824,84 @@ impl App {
     pub fn handle_scroll(&mut self, delta: i16) {
         if delta > 0 {
             self.scroll_offset = self.scroll_offset.saturating_add(delta as u16);
+
+            // Trigger lazy load when scrolled near the top
+            if self.history_loaded < self.history_total
+                && !self.loading_more_history
+            {
+                // Heuristic: if scroll offset is within ~50 lines of the total cached lines,
+                // we're near the top. Use a generous threshold.
+                let total_cached_lines: usize = self.line_cache.iter().map(|c| c.len()).sum();
+                if self.scroll_offset as usize + 20 >= total_cached_lines {
+                    self.loading_more_history = true;
+                    if let Some(tx) = &self.event_tx {
+                        let _ = tx.send(crate::event::AppEvent::LoadMoreHistory);
+                    }
+                }
+            }
         } else {
             self.scroll_offset = self.scroll_offset.saturating_sub((-delta) as u16);
         }
     }
 
     /// Load conversation history from the server into the messages list.
-    pub fn load_history(&mut self, history: Vec<(String, String)>) {
-        if history.is_empty() {
+    pub fn load_history(&mut self, history: Vec<(String, String)>, total: usize, prepend: bool) {
+        self.history_total = total;
+
+        if history.is_empty() && !prepend {
             self.sys_msg("Session resumed (no history available).");
             return;
         }
 
-        // Clear the welcome message and "resuming" messages
-        self.messages.clear();
-        self.line_cache.clear();
-
-        for (role, content) in &history {
-            let msg_role = match role.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                "system" => Role::System,
-                "tool" => Role::Tool,
-                _ => Role::System,
-            };
-            self.messages.push(ChatMessage {
-                role: msg_role,
+        let new_msgs: Vec<ChatMessage> = history
+            .iter()
+            .map(|(role, content)| ChatMessage {
+                role: match role.as_str() {
+                    "user" => Role::User,
+                    "assistant" => Role::Assistant,
+                    "system" => Role::System,
+                    "tool" => Role::Tool,
+                    _ => Role::System,
+                },
                 content: content.clone(),
                 tokens: None,
-            });
+            })
+            .collect();
+
+        let added = new_msgs.len();
+
+        if prepend {
+            // Insert older messages at the beginning
+            let old_messages = std::mem::take(&mut self.messages);
+            self.messages = new_msgs;
+            self.messages.extend(old_messages);
+            self.line_cache.clear(); // Must rebuild — indices shifted
+        } else {
+            // Initial load — clear welcome messages
+            self.messages.clear();
+            self.line_cache.clear();
+            self.messages = new_msgs;
         }
 
-        let count = history.len();
-        self.sys_msg(format!("Loaded {} messages from history.", count));
+        self.history_loaded = self
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::User || m.role == Role::Assistant)
+            .count();
+
+        self.loading_more_history = false;
+
+        if !prepend {
+            if self.history_loaded < self.history_total {
+                self.sys_msg(format!(
+                    "Loaded {} of {} messages.",
+                    self.history_loaded, self.history_total
+                ));
+            } else {
+                self.sys_msg(format!("Loaded {} messages from history.", added));
+            }
+        }
+
         self.scroll_offset = 0;
     }
 }

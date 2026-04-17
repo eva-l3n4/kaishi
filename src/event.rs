@@ -74,8 +74,12 @@ pub enum AppEvent {
     SessionResumed(String),
 
     // History replay
-    HistoryLoaded(Vec<(String, String)>),
+    HistoryLoaded(Vec<(String, String)>, usize), // (messages, total)
     HistoryFallback(String),
+
+    // Lazy loading
+    LoadMoreHistory,
+    HistoryPage(Vec<(String, String)>, usize), // (older messages, total)
 
     // Reconnect
     ReconnectRequested,

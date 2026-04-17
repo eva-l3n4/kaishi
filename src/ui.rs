@@ -143,6 +143,17 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Build all_lines from cache
     let mut all_lines: Vec<Line> = Vec::new();
+
+    // "Load more" indicator at top
+    if app.history_loaded < app.history_total {
+        let remaining = app.history_total - app.history_loaded;
+        all_lines.push(Line::from(Span::styled(
+            format!("    ↑ {} older messages — scroll up to load", remaining),
+            Style::default().fg(Color::DarkGray).italic(),
+        )));
+        all_lines.push(Line::from(""));
+    }
+
     for cached in &app.line_cache {
         all_lines.extend(cached.iter().cloned());
     }

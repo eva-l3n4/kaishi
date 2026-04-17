@@ -425,16 +425,24 @@ impl AcpClient {
         &self,
         session_id: &str,
         limit: usize,
-    ) -> Result<Vec<(String, String)>> {
+        offset: usize,
+    ) -> Result<(Vec<(String, String)>, usize)> {
         let result = self
             .request(
                 "_hermes/get_session_history",
                 Some(serde_json::json!({
                     "session_id": session_id,
                     "limit": limit,
+                    "offset": offset,
                 })),
             )
             .await?;
+
+        let total = result
+            .get("total")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
         let messages = result
             .get("messages")
             .and_then(|v| v.as_array())
@@ -455,7 +463,7 @@ impl AcpClient {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(messages)
+        Ok((messages, total))
     }
 
     pub async fn new_session(&self, cwd: &str) -> Result<String> {

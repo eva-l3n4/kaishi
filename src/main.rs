@@ -246,10 +246,10 @@ async fn run(
                 let acp_hist = acp.clone();
                 let event_tx_hist = app.event_tx.as_ref().unwrap().clone();
                 tokio::spawn(async move {
-                    match acp_hist.get_session_history(&sid, 50).await {
-                        Ok(messages) => {
+                    match acp_hist.get_session_history(&sid, 50, 0).await {
+                        Ok((messages, total)) => {
                             let _ = event_tx_hist
-                                .send(event::AppEvent::HistoryLoaded(messages));
+                                .send(event::AppEvent::HistoryLoaded(messages, total));
                         }
                         Err(_) => {
                             // Extension method not available — fallback to /context
@@ -258,8 +258,8 @@ async fn run(
                     }
                 });
             }
-            event::AppEvent::HistoryLoaded(messages) => {
-                app.load_history(messages);
+            event::AppEvent::HistoryLoaded(messages, total) => {
+                app.load_history(messages, total, false);
                 app.status = app::AgentStatus::Idle;
             }
             event::AppEvent::HistoryFallback(sid) => {
@@ -283,6 +283,27 @@ async fn run(
             }
             event::AppEvent::SessionsLoaded(sessions) => {
                 app.sessions = sessions;
+            }
+            event::AppEvent::LoadMoreHistory => {
+                if let Some(sid) = &app.session_id {
+                    let sid = sid.clone();
+                    let offset = app.history_loaded;
+                    let acp_h = acp.clone();
+                    let tx = app.event_tx.as_ref().unwrap().clone();
+                    tokio::spawn(async move {
+                        match acp_h.get_session_history(&sid, 50, offset).await {
+                            Ok((msgs, total)) => {
+                                let _ = tx.send(event::AppEvent::HistoryPage(msgs, total));
+                            }
+                            Err(_) => {
+                                // Silently fail — user can try scrolling again
+                            }
+                        }
+                    });
+                }
+            }
+            event::AppEvent::HistoryPage(messages, total) => {
+                app.load_history(messages, total, true);
             }
             event::AppEvent::AcpReady => {
                 // ACP is ready — picker can now accept Enter
