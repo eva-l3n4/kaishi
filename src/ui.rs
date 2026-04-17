@@ -468,28 +468,11 @@ fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbos
                     format!("  {}", icon),
                     Style::default().fg(icon_color),
                 )];
-                // Apply a consistent text color for user messages
-                let text_style = match msg.role {
-                    Role::User => Style::default().fg(palette::TEXT),
-                    _ => Style::default(),
-                };
-                for span in parse_inline_spans(content_lines[0]) {
-                    if span.style == Style::default() {
-                        first_spans.push(Span::styled(span.content.to_string(), text_style));
-                    } else {
-                        first_spans.push(span);
-                    }
-                }
+                first_spans.extend(parse_inline_spans(content_lines[0]));
                 lines.push(Line::from(first_spans));
                 for &cl in &content_lines[1..] {
                     let mut spans = vec![Span::raw(indent(narrow).to_string())];
-                    for span in parse_inline_spans(cl) {
-                        if span.style == Style::default() {
-                            spans.push(Span::styled(span.content.to_string(), text_style));
-                        } else {
-                            spans.push(span);
-                        }
-                    }
+                    spans.extend(parse_inline_spans(cl));
                     lines.push(Line::from(spans));
                 }
             }
@@ -642,18 +625,17 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
 }
 
 /// Parse inline markdown: **bold**, *italic*, `code`
-/// Plain text gets explicit palette::TEXT color for theme consistency.
+/// Plain text uses terminal default fg (inherits from theme).
 fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut chars = text.char_indices().peekable();
     let mut current = String::new();
-    let plain_style = Style::default().fg(palette::TEXT);
 
     while let Some(&(i, ch)) = chars.peek() {
         // Inline code: `...`
         if ch == '`' {
             if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), plain_style));
+                spans.push(Span::raw(std::mem::take(&mut current)));
             }
             chars.next();
             let mut code = String::new();
@@ -681,7 +663,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
         // Bold: **...**
         if ch == '*' && text[i..].starts_with("**") {
             if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), plain_style));
+                spans.push(Span::raw(std::mem::take(&mut current)));
             }
             chars.next();
             chars.next();
@@ -700,7 +682,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
             if closed {
                 spans.push(Span::styled(
                     bold_text,
-                    plain_style.add_modifier(Modifier::BOLD),
+                    Style::default().add_modifier(Modifier::BOLD),
                 ));
             } else {
                 current.push_str("**");
@@ -712,7 +694,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
         // Italic: *...*
         if ch == '*' {
             if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), plain_style));
+                spans.push(Span::raw(std::mem::take(&mut current)));
             }
             chars.next();
             let mut italic_text = String::new();
@@ -729,7 +711,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
             if closed {
                 spans.push(Span::styled(
                     italic_text,
-                    plain_style.add_modifier(Modifier::ITALIC),
+                    Style::default().add_modifier(Modifier::ITALIC),
                 ));
             } else {
                 current.push('*');
@@ -743,7 +725,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
     }
 
     if !current.is_empty() {
-        spans.push(Span::styled(current, plain_style));
+        spans.push(Span::raw(current));
     }
 
     spans
