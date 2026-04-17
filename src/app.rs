@@ -1,5 +1,6 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::acp::AcpClient;
@@ -140,7 +141,7 @@ impl App {
     pub async fn handle_key(
         &mut self,
         key: KeyEvent,
-        acp: &AcpClient,
+        acp: &Arc<AcpClient>,
         cwd: &str,
     ) -> Result<()> {
         // Modal takes priority
@@ -159,7 +160,7 @@ impl App {
     async fn handle_picker_key(
         &mut self,
         key: KeyEvent,
-        acp: &AcpClient,
+        acp: &Arc<AcpClient>,
         cwd: &str,
     ) -> Result<()> {
         let total = 1 + self.sessions.len(); // New Session + existing
@@ -227,7 +228,7 @@ impl App {
     async fn handle_chat_key(
         &mut self,
         key: KeyEvent,
-        acp: &AcpClient,
+        acp: &Arc<AcpClient>,
         cwd: &str,
     ) -> Result<()> {
         match (key.modifiers, key.code) {
@@ -280,14 +281,15 @@ impl App {
                     .expect("event_tx must be set")
                     .clone();
 
-                // Send prompt via ACP in a background task
+                // Send prompt via ACP in a background task (non-blocking!)
                 let prompt_text = text;
-                // We need to clone the AcpClient fields we need, or use Arc
-                // For now, send the prompt directly since we have &acp
-                let result = acp.prompt(&prompt_text, &session_id).await;
-                if let Err(e) = result {
-                    let _ = event_tx.send(AppEvent::AcpError(format!("Prompt failed: {}", e)));
-                }
+                let acp = Arc::clone(acp);
+                tokio::spawn(async move {
+                    let result = acp.prompt(&prompt_text, &session_id).await;
+                    if let Err(e) = result {
+                        let _ = event_tx.send(AppEvent::AcpError(format!("Prompt failed: {}", e)));
+                    }
+                });
             }
 
             // Scroll
@@ -378,7 +380,7 @@ impl App {
 
     // ---- Modal key handler --------------------------------------------------
 
-    async fn handle_modal_key(&mut self, key: KeyEvent, acp: &AcpClient) -> Result<()> {
+    async fn handle_modal_key(&mut self, key: KeyEvent, acp: &Arc<AcpClient>) -> Result<()> {
         let (options_len, _selected) = if let ModalState::Approval {
             ref options,
             selected,
@@ -453,7 +455,7 @@ impl App {
 
     // ---- Local slash commands ------------------------------------------------
 
-    async fn handle_local_command(&mut self, text: &str, acp: &AcpClient, cwd: &str) -> bool {
+    async fn handle_local_command(&mut self, text: &str, acp: &Arc<AcpClient>, cwd: &str) -> bool {
         let parts: Vec<&str> = text.splitn(2, ' ').collect();
         let cmd = parts[0].to_lowercase();
 

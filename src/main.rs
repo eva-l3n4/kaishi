@@ -7,6 +7,7 @@ mod ui_picker;
 
 use anyhow::Result;
 use app::App;
+use std::sync::Arc;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -36,7 +37,7 @@ async fn main() -> Result<()> {
     let mut events = EventLoop::new(250);
     let event_tx = events.sender();
 
-    let acp = acp::AcpClient::spawn(event_tx.clone(), profile.as_deref()).await?;
+    let acp = Arc::new(acp::AcpClient::spawn(event_tx.clone(), profile.as_deref()).await?);
 
     // Initialize ACP handshake
     let init_result = acp.initialize().await;
@@ -62,7 +63,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let result = run(&mut terminal, &mut app, &mut events, &acp, &cwd).await;
+    let result = run(&mut terminal, &mut app, &mut events, acp.clone(), &cwd).await;
 
     // Cleanup
     acp.shutdown().await;
@@ -81,7 +82,7 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     events: &mut EventLoop,
-    acp: &acp::AcpClient,
+    acp: Arc<acp::AcpClient>,
     cwd: &str,
 ) -> Result<()> {
     loop {
@@ -89,7 +90,7 @@ async fn run(
 
         match events.next().await? {
             event::AppEvent::Key(key) => {
-                app.handle_key(key, acp, cwd).await?;
+                app.handle_key(key, &acp, cwd).await?;
             }
             event::AppEvent::Tick => {
                 app.tick();
