@@ -64,6 +64,8 @@ pub struct AnimationState {
     pub active_tool: Option<String>,
     /// When the current turn (prompt) started.
     pub turn_start: Option<std::time::Instant>,
+    /// Stall intensity: 0.0 = normal, 0.5 = warning (yellow), 1.0 = stalled (red).
+    pub stall_intensity: f32,
 }
 
 impl AnimationState {
@@ -79,6 +81,7 @@ impl AnimationState {
             shimmer_tick: 0,
             active_tool: None,
             turn_start: None,
+            stall_intensity: 0.0,
         }
     }
 
@@ -89,6 +92,7 @@ impl AnimationState {
             self.phase_start = std::time::Instant::now();
             self.shimmer_pos = 0;
             self.shimmer_tick = 0;
+            self.stall_intensity = 0.0;
         }
     }
 }
@@ -229,6 +233,21 @@ impl App {
             return;
         }
 
+        // Stall detection: compute intensity based on silence duration
+        // Executing phase is exempt — tools can legitimately take a long time
+        if self.animation.phase != AgentPhase::Executing {
+            let silence = self.animation.last_output.elapsed().as_secs_f32();
+            self.animation.stall_intensity = if silence < 10.0 {
+                0.0
+            } else if silence < 20.0 {
+                (silence - 10.0) / 10.0 // 0.0 → 1.0 over 10s
+            } else {
+                1.0
+            };
+        } else {
+            self.animation.stall_intensity = 0.0;
+        }
+
         // Spinner glyph: advance every ~120ms (every 2-3 ticks at 50ms)
         self.animation.spinner_tick += 1;
         if self.animation.spinner_tick >= 2 {
@@ -236,17 +255,19 @@ impl App {
             self.animation.frame = self.animation.frame.wrapping_add(1);
         }
 
-        // Shimmer: advance every ~150ms (every 3rd tick)
-        self.animation.shimmer_tick += 1;
-        if self.animation.shimmer_tick >= 3 {
-            self.animation.shimmer_tick = 0;
-            let label_len = match self.animation.phase {
-                AgentPhase::Thinking => 8,   // "thinking"
-                AgentPhase::Streaming => 9,  // "streaming"
-                AgentPhase::Executing => 9,  // "executing"
-                AgentPhase::Idle => 1,
-            };
-            self.animation.shimmer_pos = (self.animation.shimmer_pos + 1) % label_len;
+        // Shimmer: advance every ~150ms (every 3rd tick) — freeze when stalled
+        if self.animation.stall_intensity < 1.0 {
+            self.animation.shimmer_tick += 1;
+            if self.animation.shimmer_tick >= 3 {
+                self.animation.shimmer_tick = 0;
+                let label_len = match self.animation.phase {
+                    AgentPhase::Thinking => 8,   // "thinking"
+                    AgentPhase::Streaming => 9,  // "streaming"
+                    AgentPhase::Executing => 9,  // "executing"
+                    AgentPhase::Idle => 1,
+                };
+                self.animation.shimmer_pos = (self.animation.shimmer_pos + 1) % label_len;
+            }
         }
     }
 

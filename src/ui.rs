@@ -132,19 +132,33 @@ fn render_spinner_line(app: &App) -> Option<Line<'static>> {
     // Leading indent
     spans.push(Span::raw("  "));
 
-    // Glyph (accent color)
+    // Glyph (color shifts with stall intensity: Magenta → Yellow → Red)
+    let glyph_color = if app.animation.stall_intensity <= 0.0 {
+        palette::ACCENT_ASSISTANT // Magenta
+    } else if app.animation.stall_intensity < 0.5 {
+        Color::Yellow
+    } else {
+        Color::Red
+    };
+
     spans.push(Span::styled(
         glyph.to_string(),
-        Style::default().fg(palette::ACCENT_ASSISTANT),
+        Style::default().fg(glyph_color),
     ));
 
     spans.push(Span::raw(" "));
 
     // Shimmer label — each char gets its own span
+    // When stalled, all chars go dim (frozen shimmer)
     for (i, ch) in label.chars().enumerate() {
+        let color = if app.animation.stall_intensity >= 1.0 {
+            Color::DarkGray // frozen
+        } else {
+            shimmer_color(i, app.animation.shimmer_pos)
+        };
         spans.push(Span::styled(
             ch.to_string(),
-            Style::default().fg(shimmer_color(i, app.animation.shimmer_pos)),
+            Style::default().fg(color),
         ));
     }
 
