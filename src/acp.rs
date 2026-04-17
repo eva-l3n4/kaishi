@@ -302,7 +302,12 @@ impl AcpClient {
                     .get("kind")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let _ = event_tx.send(AppEvent::ToolCallStart { id, name, kind });
+                let input = params
+                    .get("rawInput")
+                    .or_else(|| params.get("raw_input"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let _ = event_tx.send(AppEvent::ToolCallStart { id, name, kind, input });
             }
             "tool_call_update" => {
                 let id = params

@@ -48,6 +48,7 @@ pub enum AppEvent {
         id: String,
         name: String,
         kind: Option<String>,
+        input: Option<String>,
     },
     ToolCallUpdate {
         id: String,

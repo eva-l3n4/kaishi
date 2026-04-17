@@ -290,10 +290,23 @@ fn pre_wrap_lines(lines: Vec<Line<'static>>, max_width: usize) -> Vec<Line<'stat
         let style = line.spans.first().map(|s| s.style).unwrap_or_default();
         let full: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 
-        let mut chars = full.chars().peekable();
-        while chars.peek().is_some() {
-            let chunk: String = chars.by_ref().take(max_width).collect();
-            result.push(Line::from(Span::styled(chunk, style)));
+        // Wrap by display width, not char count
+        let mut current = String::new();
+        let mut current_width = 0;
+        for ch in full.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_width + ch_width > max_width && !current.is_empty() {
+                result.push(Line::from(Span::styled(
+                    std::mem::take(&mut current),
+                    style,
+                )));
+                current_width = 0;
+            }
+            current.push(ch);
+            current_width += ch_width;
+        }
+        if !current.is_empty() {
+            result.push(Line::from(Span::styled(current, style)));
         }
     }
     result
@@ -302,20 +315,43 @@ fn pre_wrap_lines(lines: Vec<Line<'static>>, max_width: usize) -> Vec<Line<'stat
 fn render_message(lines: &mut Vec<Line>, msg: &ChatMessage, width: usize, verbose: bool, narrow: bool) {
     // Tool messages render as a single compact line with status icon
     if msg.role == Role::Tool {
-        let (icon, color) = if msg.content.starts_with("✓") {
-            ("  ✓ ", Color::Green)
-        } else if msg.content.starts_with("✗") {
-            ("  ✗ ", Color::Red)
+        let (icon, color) = if msg.content.starts_with('✓') {
+            ("✓", Color::Green)
+        } else if msg.content.starts_with('✗') {
+            ("✗", Color::Red)
         } else {
-            ("  ⚙ ", Color::DarkGray)
+            ("⚙", Color::DarkGray)
         };
-        let name = msg.content
+
+        let rest = msg.content
             .trim_start_matches(['✓', '✗', '⚙', ' '])
             .to_string();
-        lines.push(Line::from(vec![
-            Span::styled(icon, Style::default().fg(color)),
-            Span::styled(name, Style::default().fg(color)),
-        ]));
+
+        // Split name from detail at first " (" or " — "
+        let (name, detail) = if let Some(idx) = rest.find(" (") {
+            (&rest[..idx], Some(&rest[idx..]))
+        } else if let Some(idx) = rest.find(" — ") {
+            (&rest[..idx], Some(&rest[idx..]))
+        } else {
+            (rest.as_str(), None)
+        };
+
+        let mut spans = vec![
+            Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+            Span::styled(
+                name.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        if let Some(d) = detail {
+            spans.push(Span::styled(
+                d.to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        lines.push(Line::from(spans));
         return;
     }
 
@@ -722,11 +758,10 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        s
-    } else {
-        &s[..max]
+fn truncate(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
     }
 }
 

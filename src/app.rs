@@ -755,7 +755,7 @@ impl App {
         self.pending_thought.push_str(text);
     }
 
-    pub fn handle_tool_start(&mut self, id: &str, name: &str, _kind: Option<&str>) {
+    pub fn handle_tool_start(&mut self, id: &str, name: &str, _kind: Option<&str>, input: Option<&str>) {
         // Flush thought/response before tool calls
         self.flush_pending_thought();
         if !self.pending_response.is_empty() {
@@ -763,13 +763,27 @@ impl App {
         }
 
         self.active_tools.push((id.to_string(), name.to_string()));
+
+        // Build a compact tool description with input preview
+        let preview = input
+            .map(|s| {
+                let clean = s.trim();
+                if clean.len() > 80 {
+                    format!(" ({}…)", &clean[..clean.char_indices().nth(80).map(|(i,_)|i).unwrap_or(clean.len())])
+                } else if !clean.is_empty() {
+                    format!(" ({})", clean)
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
+
         let idx = self.messages.len();
         self.messages.push(ChatMessage {
             role: Role::Tool,
-            content: format!("⚙ {}", name),
+            content: format!("⚙ {}{}", name, preview),
             tokens: None,
         });
-        // Map tool ID → message index for in-place updates
         self.tool_msg_map.insert(id.to_string(), idx);
         self.scroll_offset = 0;
     }
@@ -782,28 +796,31 @@ impl App {
         // Update the existing tool message in-place
         if let Some(&msg_idx) = self.tool_msg_map.get(id) {
             if msg_idx < self.messages.len() {
-                let name = self.messages[msg_idx]
-                    .content
-                    .trim_start_matches("⚙ ")
-                    .trim_start_matches("⠋ ")
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
+                // Extract the tool name from active_tools or fallback parse
+                let name = self.active_tools.iter()
+                    .find(|(tid, _)| tid == id)
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_else(|| {
+                        self.messages[msg_idx].content
+                            .trim_start_matches(['✓', '✗', '⚙', ' '])
+                            .split(|c: char| c == ' ' || c == '(')
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
+                    });
 
-                let new_content = if status == "completed" {
-                    format!("✓ {}", name)
-                } else if status == "error" {
-                    let detail = content
-                        .map(|t| {
-                            let preview = if t.len() > 100 { &t[..100] } else { t };
-                            format!(" — {}", preview)
-                        })
-                        .unwrap_or_default();
-                    format!("✗ {}{}", name, detail)
-                } else {
-                    // Still running — keep spinner
-                    format!("⚙ {}", name)
+                let new_content = match status {
+                    "completed" => format!("✓ {}", name),
+                    "error" => {
+                        let detail = content
+                            .map(|t| {
+                                let preview: String = t.chars().take(100).collect();
+                                format!(" — {}", preview)
+                            })
+                            .unwrap_or_default();
+                        format!("✗ {}{}", name, detail)
+                    }
+                    _ => format!("⚙ {}", name),
                 };
 
                 self.messages[msg_idx].content = new_content;

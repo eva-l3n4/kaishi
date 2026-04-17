@@ -203,8 +203,8 @@ async fn run(
             event::AppEvent::AgentThought(text) => {
                 app.handle_agent_thought(&text);
             }
-            event::AppEvent::ToolCallStart { id, name, kind } => {
-                app.handle_tool_start(&id, &name, kind.as_deref());
+            event::AppEvent::ToolCallStart { id, name, kind, input } => {
+                app.handle_tool_start(&id, &name, kind.as_deref(), input.as_deref());
             }
             event::AppEvent::ToolCallUpdate {
                 id,
