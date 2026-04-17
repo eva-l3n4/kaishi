@@ -642,16 +642,18 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
 }
 
 /// Parse inline markdown: **bold**, *italic*, `code`
+/// Plain text gets explicit palette::TEXT color for theme consistency.
 fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut chars = text.char_indices().peekable();
     let mut current = String::new();
+    let plain_style = Style::default().fg(palette::TEXT);
 
     while let Some(&(i, ch)) = chars.peek() {
         // Inline code: `...`
         if ch == '`' {
             if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
+                spans.push(Span::styled(std::mem::take(&mut current), plain_style));
             }
             chars.next();
             let mut code = String::new();
@@ -679,7 +681,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
         // Bold: **...**
         if ch == '*' && text[i..].starts_with("**") {
             if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
+                spans.push(Span::styled(std::mem::take(&mut current), plain_style));
             }
             chars.next();
             chars.next();
@@ -698,7 +700,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
             if closed {
                 spans.push(Span::styled(
                     bold_text,
-                    Style::default().add_modifier(Modifier::BOLD),
+                    plain_style.add_modifier(Modifier::BOLD),
                 ));
             } else {
                 current.push_str("**");
@@ -710,7 +712,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
         // Italic: *...*
         if ch == '*' {
             if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
+                spans.push(Span::styled(std::mem::take(&mut current), plain_style));
             }
             chars.next();
             let mut italic_text = String::new();
@@ -727,7 +729,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
             if closed {
                 spans.push(Span::styled(
                     italic_text,
-                    Style::default().add_modifier(Modifier::ITALIC),
+                    plain_style.add_modifier(Modifier::ITALIC),
                 ));
             } else {
                 current.push('*');
@@ -741,7 +743,7 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
     }
 
     if !current.is_empty() {
-        spans.push(Span::raw(current));
+        spans.push(Span::styled(current, plain_style));
     }
 
     spans
