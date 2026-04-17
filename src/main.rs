@@ -182,9 +182,12 @@ async fn run(
     cwd: &str,
     profile: Option<&str>,
 ) -> Result<()> {
-    loop {
-        terminal.draw(|frame| ui::draw(frame, app))?;
+    // Initial draw before entering event loop
+    terminal.draw(|frame| ui::draw(frame, app))?;
 
+    loop {
+        // Process next event, then drain any queued animation ticks
+        // to prevent them from starving mouse/key events
         match events.next().await? {
             event::AppEvent::Key(key) => {
                 app.handle_key(key, &acp, cwd).await?;
@@ -194,6 +197,10 @@ async fn run(
             }
             event::AppEvent::AnimationTick => {
                 app.handle_animation_tick();
+                // Skip redraw when idle — no animation to show
+                if app.animation.phase == app::AgentPhase::Idle {
+                    continue;
+                }
             }
             event::AppEvent::MouseScroll(delta) => {
                 app.handle_scroll(delta);
@@ -375,6 +382,9 @@ async fn run(
                 }
             }
         }
+
+        // Draw after processing event
+        terminal.draw(|frame| ui::draw(frame, app))?;
 
         if app.should_quit() {
             return Ok(());
