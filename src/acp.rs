@@ -205,12 +205,16 @@ impl AcpClient {
 
         // Notification (has method, no id) — session_update events
         if let Some(method) = &msg.method {
-            if method == "session_update"
+            if method == "session/update"
+                || method == "session_update"
                 || method == "notifications/session_update"
                 || method.ends_with("/session_update")
             {
                 if let Some(params) = &msg.params {
-                    Self::handle_session_update(params, event_tx);
+                    // The update payload can be at params.update (wrapped)
+                    // or directly on params (flat)
+                    let update = params.get("update").unwrap_or(params);
+                    Self::handle_session_update(update, event_tx);
                 }
             }
         }
