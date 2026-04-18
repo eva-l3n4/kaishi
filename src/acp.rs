@@ -341,11 +341,75 @@ impl AcpClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+
+                #[cfg(debug_assertions)]
+                {
+                    if let Ok(debug_json) = serde_json::to_string_pretty(&params) {
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/tmp/kaishi-tool-updates.jsonl")
+                        {
+                            use std::io::Write;
+                            let _ = writeln!(f, "{}", debug_json);
+                        }
+                    }
+                }
+
+                // Extract content from tool_call_update.
+                // The ACP server sends content in various shapes:
+                //   1. Text blocks: content[0].content.text or content[0].text
+                //   2. Edit/diff blocks: content[0].type == "diff" with oldText/newText/path
+                //      The actual unified diff is in rawOutput (JSON string with "diff" key)
+                //   3. Raw string: content as a plain string
                 let content = params
                     .pointer("/content/0/content/text")
                     .or_else(|| params.pointer("/content/0/text"))
+                    .or_else(|| params.pointer("/content/text"))
+                    .or_else(|| params.get("content").filter(|v| v.is_string()))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+
+                // Try rawOutput — contains the actual diff for edit tools
+                let content = content.or_else(|| {
+                    let raw = params.get("rawOutput").and_then(|v| v.as_str())?;
+                    // rawOutput is a JSON string; extract the "diff" field
+                    let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
+                    parsed.get("diff").and_then(|d| d.as_str()).map(|s| s.to_string())
+                });
+
+                // Try content array — join text fields, or summarize diff blocks
+                let content = content.or_else(|| {
+                    params
+                        .get("content")
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| {
+                            // First try: join text fields
+                            let texts: Vec<&str> = arr.iter()
+                                .filter_map(|item| {
+                                    item.pointer("/content/text")
+                                        .or_else(|| item.get("text"))
+                                        .and_then(|t| t.as_str())
+                                })
+                                .collect();
+                            if !texts.is_empty() {
+                                return Some(texts.join("\n"));
+                            }
+                            // Second try: summarize diff-type content blocks
+                            let diffs: Vec<String> = arr.iter()
+                                .filter(|item| item.get("type").and_then(|t| t.as_str()) == Some("diff"))
+                                .map(|item| {
+                                    let path = item.get("path").and_then(|p| p.as_str()).unwrap_or("?");
+                                    format!("edited {}", path)
+                                })
+                                .collect();
+                            if !diffs.is_empty() {
+                                return Some(diffs.join(", "));
+                            }
+                            None
+                        })
+                });
+
                 let _ = event_tx.send(AppEvent::ToolCallUpdate {
                     id,
                     status,

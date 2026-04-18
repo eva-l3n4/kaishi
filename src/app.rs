@@ -1558,9 +1558,37 @@ impl App {
     /// Check if text looks like a unified diff.
     fn looks_like_diff(text: &str) -> bool {
         let first = text.lines().next().unwrap_or("");
-        first.starts_with("--- ")
+
+        // Explicit diff headers
+        if first.starts_with("--- ")
             || first.starts_with("diff --git")
-            || (text.contains("\n+") && text.contains("\n-") && text.contains("\n@@ "))
+            || first.starts_with("*** Begin Patch")
+        {
+            return true;
+        }
+
+        // Heuristic: has unified diff markers
+        if text.contains("\n@@ ") && (text.contains("\n+") || text.contains("\n-")) {
+            return true;
+        }
+
+        // Heuristic: has enough +/- lines to look like a diff (at least 2 of each)
+        let plus_lines = text
+            .lines()
+            .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+            .count();
+        let minus_lines = text
+            .lines()
+            .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+            .count();
+        if plus_lines >= 2 && minus_lines >= 1 {
+            return true;
+        }
+        if minus_lines >= 2 && plus_lines >= 1 {
+            return true;
+        }
+
+        false
     }
 
     pub fn handle_tool_update(&mut self, id: &str, status: &str, content: Option<&str>) {
@@ -1895,18 +1923,55 @@ fn summarize_tool_input(tool_name: &str, raw_input: &str) -> Option<String> {
             let q = json.get("question").and_then(|v| v.as_str()).unwrap_or("analyze");
             truncate_summary(q, 60)
         }
+        "todo" => {
+            let todos = json.get("todos").and_then(|v| v.as_array());
+            match todos {
+                Some(t) => format!("{} items", t.len()),
+                None => "read list".to_string(),
+            }
+        }
+        "session_search" => {
+            let q = json.get("query").and_then(|v| v.as_str());
+            match q {
+                Some(q) => truncate_summary(q, 60),
+                None => "recent sessions".to_string(),
+            }
+        }
+        "execute_code" => {
+            let code = json.get("code").and_then(|v| v.as_str()).unwrap_or("");
+            let first_line = code.lines().next().unwrap_or("script");
+            let line_count = code.lines().count();
+            format!("{} ({} lines)", truncate_summary(first_line, 40), line_count)
+        }
         _ => {
-            // Generic: show first string-valued key
             if let Some(obj) = json.as_object() {
-                for (k, v) in obj.iter() {
-                    if let Some(s) = v.as_str() {
-                        if !s.is_empty() && s.len() < 100 {
-                            return Some(format!("{}: {}", k, truncate_summary(s, 60)));
+                // Priority 1: look for common meaningful keys
+                let meaningful_keys = ["path", "name", "query", "url", "command", "goal", "file", "ref"];
+                for key in meaningful_keys {
+                    if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
+                        if !s.is_empty() && s.len() < 120 {
+                            return Some(truncate_summary(s, 80));
                         }
                     }
                 }
+
+                // Priority 2: first short string value
+                for (_k, v) in obj.iter() {
+                    if let Some(s) = v.as_str() {
+                        if !s.is_empty() && s.len() < 100 {
+                            return Some(truncate_summary(s, 60));
+                        }
+                    }
+                }
+
+                // Priority 3: show key names only (not values)
+                let keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+                if !keys.is_empty() {
+                    return Some(truncate_summary(&keys.join(", "), 60));
+                }
             }
-            // Fallback: compact JSON preview
+
+            // Final fallback: compact JSON preview
             let compact = trimmed.replace('\n', " ");
             truncate_summary(&compact, 60)
         }

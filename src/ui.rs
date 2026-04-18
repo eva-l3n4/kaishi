@@ -430,7 +430,15 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 "  ◆ ",
                 Style::default().fg(palette::ACCENT_ASSISTANT),
             )];
-            new_spans.extend(first.spans.clone());
+            for span in first.spans.iter() {
+                let trimmed = span.content.trim_start();
+                if trimmed.is_empty() { continue; }
+                if span.content.len() != trimmed.len() {
+                    new_spans.push(Span::styled(trimmed.to_string(), span.style));
+                } else {
+                    new_spans.push(span.clone());
+                }
+            }
             *first = Line::from(new_spans);
         }
 
@@ -529,20 +537,26 @@ fn pre_wrap_lines(lines: Vec<Line<'static>>, max_width: usize) -> Vec<Line<'stat
 
         // Measure leading indent from the first span(s) to replicate on continuation lines.
         let indent_width = {
-            let mut w = 0usize;
-            for span in &line.spans {
-                let mut all_ws = true;
-                for ch in span.content.chars() {
-                    if ch.is_whitespace() {
-                        w += UnicodeWidthChar::width(ch).unwrap_or(0);
-                    } else {
-                        all_ws = false;
-                        break;
+            let first_span = line.spans.first().map(|s| s.content.as_ref()).unwrap_or("");
+            let has_icon = first_span.chars().any(|c| !c.is_ascii() && !c.is_whitespace());
+            if has_icon {
+                unicode_width::UnicodeWidthStr::width(first_span)
+            } else {
+                let mut w = 0usize;
+                for span in &line.spans {
+                    let mut all_ws = true;
+                    for ch in span.content.chars() {
+                        if ch.is_whitespace() {
+                            w += UnicodeWidthChar::width(ch).unwrap_or(0);
+                        } else {
+                            all_ws = false;
+                            break;
+                        }
                     }
+                    if !all_ws { break; }
                 }
-                if !all_ws { break; }
+                w
             }
-            w
         };
         // Clamp indent so continuation lines still have room for content
         let cont_indent = indent_width.min(max_width / 2);
