@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>懐紙 Kaishi — Terminal UI for Hermes Agent</title>
+  <meta name="description" content="A beautiful terminal UI for conversing with Hermes Agent. Built in Rust with ratatui.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Noto+Serif+JP:wght@400;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <style>
+    /* ── Variables ─────────────────────────────────────── */
+    :root {
+      --dusk-deep: #2d1b33;
+      --dusk-mid: #44274a;
+      --dusk-warm: #6b3a5e;
+      --blossom: #d4889c;
+      --petal: #ffb7c5;
+      --cream: #fff0f3;
+      --muted: #b8a0b0;
+      --surface: #1e1228;
+      --surface-alt: #241530;
+      --code-bg: #0d0a12;
+    }
+
+    /* ── Reset & Base ─────────────────────────────────── */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      color: var(--cream);
+      background: var(--dusk-deep);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .section-inner {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Hero ──────────────────────────────────────────── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      background: linear-gradient(180deg, var(--dusk-deep) 0%, var(--dusk-mid) 40%, var(--dusk-warm) 70%, var(--blossom) 100%);
+      position: relative;
+      overflow: hidden;
+      text-align: center;
+    }
+
+    .hero-kanji {
+      font-family: 'Noto Serif JP', serif;
+      font-size: clamp(48px, 8vw, 72px);
+      font-weight: 700;
+      color: var(--cream);
+      line-height: 1.2;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-name {
+      font-family: 'Inter', sans-serif;
+      font-size: clamp(16px, 2.5vw, 22px);
+      font-weight: 300;
+      letter-spacing: 6px;
+      color: var(--cream);
+      margin-top: 4px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-tagline {
+      font-family: 'Inter', sans-serif;
+      font-size: clamp(13px, 1.8vw, 16px);
+      font-weight: 400;
+      color: var(--blossom);
+      margin-top: 16px;
+      letter-spacing: 1px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── Petals ────────────────────────────────────────── */
+    .petal {
+      position: absolute;
+      top: -20px;
+      width: 8px;
+      height: 8px;
+      background: var(--petal);
+      border-radius: 50% 0 50% 50%;
+      opacity: 0.3;
+      pointer-events: none;
+      animation: fall linear infinite;
+    }
+
+    @keyframes fall {
+      0%   { transform: translateY(-20px) rotate(0deg) translateX(0px); opacity: 0; }
+      10%  { opacity: 0.3; }
+      90%  { opacity: 0.3; }
+      100% { transform: translateY(100vh) rotate(360deg) translateX(40px); opacity: 0; }
+    }
+
+    .petal:nth-child(1)  { left: 10%; animation-duration: 12s; animation-delay: 0s; width: 6px; height: 6px; opacity: 0.2; }
+    .petal:nth-child(2)  { left: 25%; animation-duration: 15s; animation-delay: 2s; width: 8px; height: 8px; opacity: 0.35; }
+    .petal:nth-child(3)  { left: 40%; animation-duration: 10s; animation-delay: 4s; width: 5px; height: 5px; opacity: 0.25; }
+    .petal:nth-child(4)  { left: 55%; animation-duration: 14s; animation-delay: 1s; width: 7px; height: 7px; opacity: 0.3; }
+    .petal:nth-child(5)  { left: 70%; animation-duration: 11s; animation-delay: 3s; width: 6px; height: 6px; opacity: 0.2; }
+    .petal:nth-child(6)  { left: 85%; animation-duration: 13s; animation-delay: 5s; width: 9px; height: 9px; opacity: 0.4; }
+    .petal:nth-child(7)  { left: 15%; animation-duration: 16s; animation-delay: 7s; width: 5px; height: 5px; opacity: 0.2; }
+    .petal:nth-child(8)  { left: 60%; animation-duration: 9s;  animation-delay: 6s; width: 7px; height: 7px; opacity: 0.3; }
+    .petal:nth-child(9)  { left: 35%; animation-duration: 14s; animation-delay: 8s; width: 4px; height: 4px; opacity: 0.25; }
+    .petal:nth-child(10) { left: 80%; animation-duration: 11s; animation-delay: 2s; width: 6px; height: 6px; opacity: 0.3; }
+
+    /* ── Sections ──────────────────────────────────────── */
+    .section {
+      padding: 80px 0;
+    }
+
+    .section--surface {
+      background: var(--surface);
+    }
+
+    .section--surface-alt {
+      background: var(--surface-alt);
+    }
+
+    .section h2 {
+      font-family: 'Inter', sans-serif;
+      font-weight: 600;
+      font-size: clamp(20px, 3vw, 28px);
+      color: var(--cream);
+      margin-bottom: 20px;
+    }
+
+    .section p {
+      font-size: clamp(15px, 1.8vw, 17px);
+      line-height: 1.7;
+      color: var(--muted);
+    }
+
+    .section a {
+      color: var(--blossom);
+      text-decoration: none;
+      border-bottom: 1px solid var(--dusk-warm);
+      transition: border-color 0.2s;
+    }
+
+    .section a:hover {
+      border-bottom-color: var(--blossom);
+    }
+
+    /* ── Features ──────────────────────────────────────── */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-top: 32px;
+    }
+
+    .feature-card {
+      background: rgba(255, 183, 197, 0.06);
+      border: 1px solid rgba(255, 183, 197, 0.08);
+      border-radius: 8px;
+      padding: 24px;
+      transition: border-color 0.2s ease;
+    }
+
+    .feature-card:hover {
+      border-color: rgba(255, 183, 197, 0.2);
+    }
+
+    .feature-card h3 {
+      font-family: 'Inter', sans-serif;
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--blossom);
+      margin-bottom: 8px;
+    }
+
+    .feature-card p {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+
+    /* ── Terminal Mock ─────────────────────────────────── */
+    .terminal {
+      background: var(--code-bg);
+      border: 1px solid rgba(255, 183, 197, 0.12);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 32px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .terminal-titlebar {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .terminal-title {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 8px;
+    }
+
+    .terminal-body {
+      padding: 0;
+    }
+
+    .terminal-statusbar {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 4px 12px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+    }
+
+    .terminal-statusbar .model { color: var(--cream); }
+    .terminal-statusbar .ctx-bar { color: #4ade80; }
+
+    .terminal-messages {
+      padding: 12px 16px;
+    }
+
+    .t-line { padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+    .t-blank { height: 10px; }
+    .t-icon-user { color: #67e8f9; }
+    .t-icon-assistant { color: #c084fc; }
+    .t-icon-tool { color: #4ade80; }
+    .t-dim { color: #6b7280; }
+    .t-text { color: var(--cream); }
+
+    .terminal-input {
+      padding: 8px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .t-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      background: var(--cream);
+      animation: blink 1s step-end infinite;
+      vertical-align: text-bottom;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    /* ── Get Started ──────────────────────────────────── */
+    .section--bookend {
+      background: linear-gradient(180deg, var(--surface-alt), var(--dusk-deep));
+      text-align: center;
+    }
+
+    .install-block {
+      display: inline-block;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 183, 197, 0.12);
+      border-radius: 8px;
+      padding: 12px 28px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 15px;
+      color: var(--blossom);
+      margin: 24px 0;
+      cursor: default;
+      user-select: all;
+    }
+
+    .section p.hint {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 24px;
+    }
+
+    .hint code {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--blossom);
+    }
+
+    .github-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--blossom);
+      text-decoration: none;
+      font-size: 15px;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s;
+    }
+
+    .github-link:hover {
+      border-bottom-color: var(--blossom);
+    }
+
+    /* ── Footer ───────────────────────────────────────── */
+    .footer {
+      padding: 32px 0;
+      text-align: center;
+      background: var(--dusk-deep);
+    }
+
+    .footer p {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    /* ── Responsive ───────────────────────────────────── */
+    @media (max-width: 768px) {
+      .section { padding: 60px 0; }
+      .section-inner { padding: 0 20px; }
+      .features { grid-template-columns: 1fr; gap: 12px; }
+      .hero { min-height: 80vh; }
+      .terminal { font-size: 11px; }
+      .terminal-messages { padding: 12px 10px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .petal { animation: none; display: none; }
+      .t-cursor { animation: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ════ Hero ════ -->
+  <section class="hero">
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+    <div class="petal"></div>
+
+    <div class="hero-kanji">懐紙</div>
+    <div class="hero-name">KAISHI</div>
+    <div class="hero-tagline">A terminal for cherry blossom season</div>
+  </section>
+
+  <!-- ════ What is Kaishi? ════ -->
+  <section class="section section--surface">
+    <div class="section-inner">
+      <h2>What is Kaishi?</h2>
+      <p>
+        Kaishi is a terminal UI for conversing with
+        <a href="https://github.com/nousresearch/hermes-agent" target="_blank" rel="noopener">Hermes Agent</a>.
+        Built in Rust with ratatui, it speaks the ACP protocol — streaming
+        responses in real time, highlighting code with syntect, and managing
+        sessions so you can pick up right where you left off.
+      </p>
+    </div>
+  </section>
+
+  <!-- ════ Features ════ -->
+  <section class="section section--surface-alt">
+    <div class="section-inner">
+      <h2>Features</h2>
+      <div class="features">
+        <div class="feature-card">
+          <h3>Streaming</h3>
+          <p>Real-time token flow with animated thinking indicators. Watch responses arrive live.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Syntax Highlighting</h3>
+          <p>Code blocks rendered with syntect and the base16-eighties theme. Reads like an editor.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Session Management</h3>
+          <p>Pick up conversations where you left off. Session picker with history replay.</p>
+        </div>
+        <div class="feature-card">
+          <h3>File Mentions</h3>
+          <p>Type @ to attach files with fuzzy autocomplete. Context without copy-paste.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════ Terminal Preview ════ -->
+  <section class="section section--surface">
+    <div class="section-inner">
+      <h2>See it in action</h2>
+      <div class="terminal">
+        <div class="terminal-titlebar">
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <span class="terminal-title">kaishi</span>
+        </div>
+        <div class="terminal-body">
+          <div class="terminal-statusbar">
+            <span><span class="model">claude-sonnet-4-6</span> <span class="t-dim">│</span> <span class="ctx-bar">[████░░░░░░] 42%</span></span>
+            <span class="t-dim">~/hermes-tui</span>
+          </div>
+          <div class="terminal-messages">
+            <div class="t-line">  <span class="t-icon-user">❯</span> <span class="t-text">What's in this project?</span></div>
+            <div class="t-blank"></div>
+            <div class="t-line">  <span class="t-icon-assistant">◆</span> <span class="t-text">This is a Rust TUI built with ratatui. It speaks the</span></div>
+            <div class="t-line">    <span class="t-text">ACP protocol to communicate with Hermes Agent.</span></div>
+            <div class="t-blank"></div>
+            <div class="t-line">    <span class="t-dim">┌─</span> <span class="t-icon-tool">✓</span> <span class="t-icon-tool" style="font-weight:bold;">search_files</span> <span class="t-dim">──────────────────</span></div>
+            <div class="t-line">    <span class="t-dim">│</span> <span class="t-dim">Found 11 source files in src/</span></div>
+            <div class="t-line">    <span class="t-dim">└─────────────────────────────────</span></div>
+            <div class="t-blank"></div>
+            <div class="t-line">  <span class="t-dim">──── 1.2k in · 247 out · 95% cached · 3s ────</span></div>
+          </div>
+          <div class="terminal-input">
+            <div class="t-line">  <span class="t-dim">❯</span> <span class="t-cursor"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════ Get Started ════ -->
+  <section class="section section--bookend">
+    <div class="section-inner">
+      <h2>Get Started</h2>
+      <div class="install-block">cargo install kaishi</div>
+      <p class="hint">Then just run <code>kaishi</code> in your terminal.</p>
+      <a href="https://github.com/eva-l3n4/kaishi" class="github-link" target="_blank" rel="noopener">
+        View on GitHub →
+      </a>
+    </div>
+  </section>
+
+  <!-- ════ Footer ════ -->
+  <footer class="footer">
+    <p>Built with 🌸</p>
+  </footer>
+
+</body>
+</html>

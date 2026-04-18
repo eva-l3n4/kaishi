@@ -1,0 +1,11 @@
+[build]
+  publish = "site"
+
+# No build command needed — pure static files
+
+# Security headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
