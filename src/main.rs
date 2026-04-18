@@ -111,17 +111,9 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         // Initialize handshake
         match acp_init.initialize().await {
-            Ok(init) => {
-                if let Some(model) = init
-                    .get("agentInfo")
-                    .or_else(|| init.get("agent_info"))
-                    .and_then(|s| s.get("name"))
-                    .and_then(|m| m.as_str())
-                {
-                    let _ = event_tx_init.send(event::AppEvent::SlashCommandResponse(
-                        format!("__model_name:{}", model),
-                    ));
-                }
+            Ok(_init) => {
+                // Note: agentInfo.name is "hermes-agent" (software name), not the LLM model.
+                // The real model comes from session data on resume, or /model query on new session.
             }
             Err(e) => {
                 let _ = event_tx_init.send(event::AppEvent::AcpError(
@@ -314,9 +306,21 @@ async fn run(
                 }
             }
             event::AppEvent::SessionCreated(sid) => {
-                app.session_id = Some(sid);
+                app.session_id = Some(sid.clone());
                 app.status = app::AgentStatus::Idle;
                 app.sys_msg("Session ready.");
+
+                // Query the actual model name for display
+                let acp_model = acp.clone();
+                let event_tx_model = app.event_tx.as_ref().unwrap().clone();
+                tokio::spawn(async move {
+                    if let Ok(result) = acp_model.prompt("/model", &sid).await {
+                        if let Some(text) = result.get("final_response")
+                            .or_else(|| result.get("stop_reason"))
+                            .and_then(|_| None::<&str>)  // just need the side effect
+                        { let _ = text; }
+                    }
+                });
             }
             event::AppEvent::SessionResumed(sid) => {
                 app.session_id = Some(sid.clone());
@@ -425,18 +429,7 @@ async fn run(
                         let acp_init = Arc::clone(&acp);
                         let event_tx_init = event_tx.clone();
                         tokio::spawn(async move {
-                            if let Ok(init) = acp_init.initialize().await {
-                                if let Some(model) = init
-                                    .get("agentInfo")
-                                    .or_else(|| init.get("agent_info"))
-                                    .and_then(|s| s.get("name"))
-                                    .and_then(|m| m.as_str())
-                                {
-                                    let _ = event_tx_init.send(event::AppEvent::SlashCommandResponse(
-                                        format!("__model_name:{}", model),
-                                    ));
-                                }
-                            }
+                            let _ = acp_init.initialize().await;
                             if let Ok(sessions) = acp_init.list_sessions().await {
                                 let _ = event_tx_init.send(event::AppEvent::SessionsLoaded(sessions));
                             }

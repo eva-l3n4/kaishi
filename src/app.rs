@@ -1264,6 +1264,15 @@ impl App {
     }
 
     pub fn handle_prompt_done(&mut self, _stop_reason: &str, usage: Option<Usage>) {
+        // Extract model name from /model slash command responses
+        if self.pending_response.starts_with("Current model: ") {
+            if let Some(model_line) = self.pending_response.lines().next() {
+                if let Some(model) = model_line.strip_prefix("Current model: ") {
+                    self.model_name = model.trim().to_string();
+                }
+            }
+        }
+
         // Terminal bell — notifies backgrounded terminals that a turn finished
         print!("\x07");
         // Compute elapsed time for turn summary
