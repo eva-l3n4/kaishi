@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaishi · Design</title>
+<style>
+  :root {
+    --bg: #1e1e2e;
+    --surface: #181825;
+    --overlay: #313244;
+    --text: #cdd6f4;
+    --subtext: #a6adc8;
+    --dim: #585b70;
+    --mauve: #cba6f7;
+    --blue: #89b4fa;
+    --green: #a6e3a1;
+    --red: #f38ba8;
+    --peach: #fab387;
+    --yellow: #f9e2af;
+    --teal: #94e2d5;
+    --cyan: #89dceb;
+    --lavender: #b4befe;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    background: var(--bg);
+    color: var(--text);
+    padding: 2rem;
+    padding-bottom: 4rem;
+    line-height: 1.6;
+  }
+  h1 { color: var(--mauve); font-size: 1.4rem; margin-bottom: 0.3rem; }
+  h2 { color: var(--blue); font-size: 1.1rem; margin: 2rem 0 0.75rem; border-bottom: 1px solid var(--overlay); padding-bottom: 0.4rem; }
+  h3 { color: var(--teal); font-size: 0.95rem; margin: 1.2rem 0 0.5rem; }
+  .subtitle { color: var(--subtext); font-size: 0.85rem; margin-bottom: 2rem; }
+
+  .term {
+    background: #11111b;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    font-size: 0.78rem;
+    line-height: 1.8;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+    border: 1px solid var(--overlay);
+  }
+  .term .dim { color: var(--dim); }
+  .term .mauve { color: var(--mauve); }
+  .term .green { color: var(--green); }
+  .term .red { color: var(--red); }
+  .term .peach { color: var(--peach); }
+  .term .blue { color: var(--blue); }
+  .term .yellow { color: var(--yellow); }
+  .term .cyan { color: var(--cyan); }
+  .term .teal { color: var(--teal); }
+  .term .lavender { color: var(--lavender); }
+  .term .bold { font-weight: 700; }
+
+  /* Shimmer animation */
+  @keyframes shimmer-travel {
+    0% { color: var(--dim); }
+    40% { color: var(--subtext); }
+    60% { color: var(--subtext); }
+    100% { color: var(--dim); }
+  }
+  .sh0 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 0.0s; }
+  .sh1 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 0.15s; }
+  .sh2 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 0.3s; }
+  .sh3 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 0.45s; }
+  .sh4 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 0.6s; }
+  .sh5 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 0.75s; }
+  .sh6 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 0.9s; }
+  .sh7 { animation: shimmer-travel 2s ease-in-out infinite; animation-delay: 1.05s; }
+
+  /* Spinner animation */
+  @keyframes spin-cycle {
+    0%   { content: '·'; }
+    16%  { content: '✢'; }
+    33%  { content: '✳'; }
+    50%  { content: '✶'; }
+    66%  { content: '✻'; }
+    83%  { content: '✽'; }
+  }
+  .spinner-demo::after {
+    content: '✶';
+    animation: spin-cycle 1.2s steps(1) infinite;
+  }
+
+  .note {
+    background: rgba(203,166,247,0.08);
+    border-left: 3px solid var(--mauve);
+    padding: 0.6rem 1rem;
+    margin: 0.75rem 0;
+    font-size: 0.8rem;
+    color: var(--subtext);
+  }
+
+  .code {
+    background: var(--surface);
+    border: 1px solid var(--overlay);
+    border-radius: 6px;
+    padding: 1rem;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+    color: var(--subtext);
+  }
+  .code .kw { color: var(--mauve); }
+  .code .ty { color: var(--yellow); }
+  .code .str { color: var(--green); }
+  .code .cm { color: var(--dim); font-style: italic; }
+  .code .fn { color: var(--blue); }
+  .code .num { color: var(--peach); }
+
+  .phase-grid {
+    display: grid;
+    grid-template-columns: 120px 1fr 1fr;
+    gap: 0;
+    margin: 0.75rem 0;
+    font-size: 0.8rem;
+    border: 1px solid var(--overlay);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .phase-grid > div {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--overlay);
+  }
+  .phase-grid > div:nth-child(3n+1) {
+    background: var(--surface);
+    color: var(--teal);
+    font-weight: 600;
+  }
+  .phase-grid > div:nth-child(-n+3) {
+    background: var(--overlay);
+    color: var(--subtext);
+    font-weight: 600;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .section { margin: 0.5rem 0; }
+
+  .indicator-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--overlay);
+    padding: 0.5rem 2rem;
+    font-size: 0.75rem;
+    color: var(--subtext);
+    text-align: center;
+    border-top: 1px solid var(--dim);
+  }
+</style>
+</head>
+<body>
+
+<h1>懐紙 Kaishi — Design</h1>
+<p class="subtitle">Streaming polish · Dual-rate animation · ANSI-native theming</p>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>1. Animation System — Dual-Rate Ticks</h2>
+
+<div class="section">
+<p style="color: var(--subtext); font-size: 0.82rem; margin-bottom: 0.75rem;">
+  Two tick rates in the event loop. Content tick handles UI refresh. Animation tick drives spinner + shimmer at 50ms (20fps) without invalidating the message line cache.
+</p>
+
+<div class="code">
+<span class="kw">pub enum</span> <span class="ty">AppEvent</span> {<br>
+&nbsp;&nbsp;<span class="cm">// ... existing variants ...</span><br>
+&nbsp;&nbsp;<span class="fn">Tick</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// ~200ms — UI refresh, cursor blink</span><br>
+&nbsp;&nbsp;<span class="fn">AnimationTick</span>,&nbsp;&nbsp;<span class="cm">// ~50ms — spinner frame, shimmer position, elapsed time</span><br>
+}
+</div>
+
+<div class="note">
+  AnimationTick only bumps counters in <code>AnimationState</code> and triggers a re-render.
+  It never touches ACP state, never invalidates the line cache, never rebuilds message Spans.
+  The draw function reads AnimationState to render the spinner line — that single line is rebuilt
+  each frame, everything else comes from cache.
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>2. AnimationState Struct</h2>
+
+<div class="code">
+<span class="kw">pub struct</span> <span class="ty">AnimationState</span> {<br>
+&nbsp;&nbsp;<span class="cm">// Spinner</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> frame: <span class="ty">usize</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// index into SPINNER_GLYPHS</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> phase: <span class="ty">AgentPhase</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// Thinking | Streaming | Executing | Idle</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> phase_start: <span class="ty">Instant</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// when current phase began</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> last_output: <span class="ty">Instant</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// last time we received content (for stall detection)</span><br>
+<br>
+&nbsp;&nbsp;<span class="cm">// Shimmer (traveling highlight)</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> shimmer_pos: <span class="ty">usize</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// which char in the label is highlighted</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> shimmer_tick: <span class="ty">u8</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// sub-counter — advance shimmer every N animation ticks</span><br>
+<br>
+&nbsp;&nbsp;<span class="cm">// Executing tool context</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> active_tool: <span class="ty">Option</span>&lt;<span class="ty">String</span>&gt;,&nbsp;&nbsp;<span class="cm">// name of tool currently running</span><br>
+}
+</div>
+
+<div class="code">
+<span class="kw">const</span> <span class="fn">SPINNER_GLYPHS</span>: &amp;[<span class="ty">char</span>] = &amp;[<span class="str">'·'</span>, <span class="str">'✢'</span>, <span class="str">'✳'</span>, <span class="str">'✶'</span>, <span class="str">'✻'</span>, <span class="str">'✽'</span>];<br>
+<span class="cm">// Cycle: forward then reverse → [· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢] repeat</span><br>
+<span class="cm">// CC does this — the bounce gives it a breathing quality</span>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>3. Agent Phases — Spinner Line</h2>
+
+<div class="phase-grid">
+  <div>Phase</div><div>Spinner Line</div><div>Triggered By</div>
+
+  <div>Thinking</div>
+  <div><code><span style="color:var(--mauve)">✶</span> <span style="color:var(--dim)">thinking · 3s</span></code></div>
+  <div>First <code>agent_thought_chunk</code>, or prompt sent with no response yet</div>
+
+  <div>Streaming</div>
+  <div><code><span style="color:var(--mauve)">✳</span> <span style="color:var(--dim)">streaming · 8s</span></code></div>
+  <div>First <code>agent_message_chunk</code></div>
+
+  <div>Executing</div>
+  <div><code><span style="color:var(--mauve)">✢</span> <span style="color:var(--dim)">executing · 2s</span></code></div>
+  <div><code>tool_call</code> event (active_tool set)</div>
+
+  <div>Idle</div>
+  <div><em>(no spinner line)</em></div>
+  <div><code>prompt</code> response received (stopReason)</div>
+</div>
+
+<div class="note">
+  Phase transitions reset <code>phase_start</code> to <code>Instant::now()</code>.
+  The elapsed counter always shows time in the current phase, not total turn time.
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>4. Shimmer — Traveling Highlight</h2>
+
+<p style="color: var(--subtext); font-size: 0.82rem; margin-bottom: 0.75rem;">
+  A single bright character travels across the phase label text, with adjacent characters getting a half-brightness lift. Pure ANSI — no RGB.
+</p>
+
+<h3>Live Preview</h3>
+<div class="term" style="font-size: 1rem; padding: 1rem 1.5rem;">
+  <span class="mauve" style="font-size:1.1rem">✶</span>&nbsp;
+  <span class="sh0">t</span><span class="sh1">h</span><span class="sh2">i</span><span class="sh3">n</span><span class="sh4">k</span><span class="sh5">i</span><span class="sh6">n</span><span class="sh7">g</span>
+  <span class="dim"> · 3s</span>
+</div>
+
+<h3>Color Mapping (ANSI-native)</h3>
+<div class="code">
+<span class="cm">// Three brightness levels using terminal-native colors:</span><br>
+<span class="kw">const</span> <span class="fn">SHIMMER_DIM</span>: <span class="ty">Color</span> = Color::DarkGray;&nbsp;&nbsp;<span class="cm">// base text</span><br>
+<span class="kw">const</span> <span class="fn">SHIMMER_MID</span>: <span class="ty">Color</span> = Color::Gray;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// adjacent to highlight</span><br>
+<span class="kw">const</span> <span class="fn">SHIMMER_HI</span>: <span class="ty">Color</span> = Color::White;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// the highlighted char</span><br>
+<br>
+<span class="cm">// Per character:</span><br>
+<span class="kw">fn</span> <span class="fn">shimmer_color</span>(char_idx: <span class="ty">usize</span>, highlight_pos: <span class="ty">usize</span>) -> <span class="ty">Color</span> {<br>
+&nbsp;&nbsp;<span class="kw">let</span> dist = char_idx.abs_diff(highlight_pos);<br>
+&nbsp;&nbsp;<span class="kw">match</span> dist {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="num">0</span> => SHIMMER_HI,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="num">1</span> => SHIMMER_MID,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;_ => SHIMMER_DIM,<br>
+&nbsp;&nbsp;}<br>
+}
+</div>
+
+<div class="note">
+  Shimmer advances every ~150ms (every 3rd animation tick at 50ms).
+  The highlight wraps around: after the last character, it jumps back to the first.
+  This matches CC's ShimmerChar pattern but with ANSI palette instead of RGB interpolation.
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>5. Turn Completion Summary</h2>
+
+<p style="color: var(--subtext); font-size: 0.82rem; margin-bottom: 0.75rem;">
+  When the prompt response arrives with <code>stopReason</code> and <code>usage</code>, show a compact summary:
+</p>
+
+<div class="term" style="font-size: 0.9rem;">
+  <span class="mauve">  ◆</span> Here's the refactored module. I've extracted the...<br>
+  <br>
+  <span class="dim">    ── 1,234 in · 567 out · 12.3s ──</span>
+</div>
+
+<div class="note">
+  Shown as a dim divider line after the assistant's final message.
+  Only appears when we have usage data (which we always do from the prompt response).
+  Format: <code>input_tokens in · output_tokens out · elapsed</code>.
+  Elapsed is total turn time (from prompt sent to response received), not per-phase.
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>6. Spinner Glyph Details</h2>
+
+<div class="term" style="font-size: 0.9rem; text-align: center; padding: 1.5rem;">
+  <span class="mauve" style="font-size: 1.5rem; letter-spacing: 1rem;">· ✢ ✳ ✶ ✻ ✽</span><br>
+  <span class="dim" style="font-size: 0.7rem;">bounce: forward → reverse → forward ...</span>
+</div>
+
+<div class="code">
+<span class="cm">// Build the bounce sequence once:</span><br>
+<span class="kw">const</span> <span class="fn">GLYPHS</span>: &amp;[<span class="ty">char</span>] = &amp;[<span class="str">'·'</span>, <span class="str">'✢'</span>, <span class="str">'✳'</span>, <span class="str">'✶'</span>, <span class="str">'✻'</span>, <span class="str">'✽'</span>];<br>
+<br>
+<span class="kw">fn</span> <span class="fn">bounce_sequence</span>() -> <span class="ty">Vec</span>&lt;<span class="ty">char</span>&gt; {<br>
+&nbsp;&nbsp;<span class="kw">let mut</span> seq: <span class="ty">Vec</span>&lt;<span class="ty">char</span>&gt; = GLYPHS.to_vec();<br>
+&nbsp;&nbsp;seq.extend(GLYPHS.iter().rev().skip(<span class="num">1</span>).take(GLYPHS.len() - <span class="num">2</span>));<br>
+&nbsp;&nbsp;seq <span class="cm">// [· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢]</span><br>
+}<br>
+<br>
+<span class="cm">// Advance every ~120ms (roughly every 2-3 animation ticks)</span><br>
+<span class="cm">// → full cycle ≈ 1.2s, matching CC's breathing rhythm</span>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>7. Layout Chrome (Documented, Deferred)</h2>
+
+<p style="color: var(--subtext); font-size: 0.82rem; margin-bottom: 0.75rem;">
+  Not in scope for this implementation pass, but captured for future work:
+</p>
+
+<h3>Status Bar Enhancements</h3>
+<div class="term" style="font-size: 0.85rem;">
+  <span class="dim" style="background: #313244; padding: 2px 6px;">
+    <span class="teal">kaishi</span>
+    <span class="dim"> │ </span><span class="cyan">opus-4-6</span>
+    <span class="dim"> │ ctx:</span><span class="yellow">42%</span>
+    <span class="dim"> │ </span><span class="green">manual</span>
+    <span class="dim"> │ ~/hermes-tui</span>
+  </span>
+</div>
+
+<h3>Prompt Input</h3>
+<div class="term" style="font-size: 0.85rem;">
+  <span class="dim">╭──────────────────────────────────────╮</span><br>
+  <span class="dim">│</span> <span class="text">_</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dim">│</span><br>
+  <span class="dim">╰─</span> <span class="dim">esc interrupt · / commands</span> <span class="dim">──────╯</span>
+</div>
+
+<h3>Keyboard Shortcut Hints</h3>
+<div class="term" style="font-size: 0.85rem;">
+  <span class="dim">↑/↓ navigate · enter select · n new · q quit</span>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>8. Rename: hermes-tui → Kaishi (懐紙)</h2>
+
+<div class="note" style="border-left-color: var(--peach);">
+  <strong style="color: var(--peach);">懐紙 kaishi</strong> — the folded paper used in Japanese tea ceremony.
+  A surface for the exchange between host and guest.
+  Rename touches: Cargo.toml, binary name, status bar, README, git repo.
+</div>
+
+<div class="indicator-bar">
+  Design reference — return to terminal to continue
+</div>
+
+<script src="/helper.js"></script>
+</body>
+</html>

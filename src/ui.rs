@@ -1048,6 +1048,41 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
             continue;
         }
 
+        // Markdown links: [text](url) — render text underlined, URL in dim
+        if ch == '[' {
+            // Look ahead for the full [text](url) pattern
+            let remaining = &text[i..];
+            if let Some(close_bracket) = remaining.find(']') {
+                if remaining[close_bracket..].starts_with("](") {
+                    if let Some(close_paren) = remaining[close_bracket + 2..].find(')') {
+                        let link_text = &remaining[1..close_bracket];
+                        let url = &remaining[close_bracket + 2..close_bracket + 2 + close_paren];
+                        if !link_text.is_empty() {
+                            if !current.is_empty() {
+                                spans.push(Span::raw(std::mem::take(&mut current)));
+                            }
+                            spans.push(Span::styled(
+                                link_text.to_string(),
+                                Style::default().add_modifier(Modifier::UNDERLINED),
+                            ));
+                            if !url.is_empty() {
+                                spans.push(Span::styled(
+                                    format!(" ({})", url),
+                                    Style::default().fg(Color::DarkGray),
+                                ));
+                            }
+                            // Advance past the entire [text](url)
+                            let total_len = close_bracket + 2 + close_paren + 1;
+                            for _ in 0..total_len {
+                                chars.next();
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
         chars.next();
         current.push(ch);
     }

@@ -8,6 +8,13 @@ use tokio::sync::mpsc;
 use crate::acp::AcpClient;
 use crate::event::{AppEvent, ApprovalOption, SessionInfo, Usage};
 
+/// All known slash commands for tab completion.
+const SLASH_COMMANDS: &[&str] = &[
+    "/clear", "/compact", "/context", "/exit", "/help", "/model",
+    "/new", "/quit", "/reset", "/title", "/tools", "/usage",
+    "/verbose", "/version", "/yolo",
+];
+
 /// Visible role tag for messages in the conversation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Role {
@@ -571,6 +578,13 @@ impl App {
                 });
             }
 
+            // Clear screen (Ctrl+L)
+            (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                self.messages.clear();
+                self.line_cache.clear();
+                self.scroll_offset = 0;
+            }
+
             // Scroll
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(10);
@@ -634,6 +648,25 @@ impl App {
                 self.cursor = self.input.len();
                 self.scroll_offset = self.scroll_offset.saturating_sub(10);
             }
+            // Word-level cursor movement: Alt+Left / Alt+Right
+            (KeyModifiers::ALT, KeyCode::Left) => {
+                let before = &self.input[..self.cursor];
+                let trimmed = before.trim_end();
+                self.cursor = trimmed
+                    .rfind(|c: char| c.is_whitespace())
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+            }
+            (KeyModifiers::ALT, KeyCode::Right) => {
+                let after = &self.input[self.cursor..];
+                let skip_word = after
+                    .find(|c: char| c.is_whitespace())
+                    .unwrap_or(after.len());
+                let skip_ws = after[skip_word..]
+                    .find(|c: char| !c.is_whitespace())
+                    .unwrap_or(after.len() - skip_word);
+                self.cursor += skip_word + skip_ws;
+            }
             (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
                 // Delete word backward
                 let before = &self.input[..self.cursor];
@@ -651,6 +684,35 @@ impl App {
             }
 
             // Text input
+            (_, KeyCode::Tab) if self.status == AgentStatus::Idle && self.input.starts_with('/') => {
+                // Tab-complete slash commands: cycle through matches
+                let prefix = self.input.to_lowercase();
+                let matches: Vec<&str> = SLASH_COMMANDS
+                    .iter()
+                    .filter(|cmd| cmd.starts_with(&prefix))
+                    .copied()
+                    .collect();
+                if matches.len() == 1 {
+                    self.input = format!("{} ", matches[0]);
+                    self.cursor = self.input.len();
+                } else if !matches.is_empty() {
+                    // Find longest common prefix among matches
+                    let mut common = matches[0].to_string();
+                    for m in &matches[1..] {
+                        while !m.starts_with(&common) {
+                            common.pop();
+                        }
+                    }
+                    if common.len() > self.input.len() {
+                        self.input = common;
+                        self.cursor = self.input.len();
+                    } else {
+                        // Show available completions as a system message
+                        let list: Vec<&str> = matches.to_vec();
+                        self.sys_msg(list.join("  "));
+                    }
+                }
+            }
             (_, KeyCode::Char(c)) => {
                 self.input.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
@@ -854,10 +916,14 @@ impl App {
                      \n\
                      Keys:\n\
                      \n\
-                     Scroll: PgUp/PgDn, mouse wheel\n\
+                     Scroll: PgUp/PgDn, Ctrl+U, mouse wheel\n\
                      Cancel: Ctrl+C during generation\n\
-                     Newline: Ctrl+J\n\
+                     Clear:  Ctrl+L\n\
+                     Newline: Ctrl+J or Shift+Enter\n\
                      History: Up/Down arrows\n\
+                     Word jump: Alt+Left/Right\n\
+                     Thinking: Ctrl+O toggle expand\n\
+                     Tab: complete /commands\n\
                      \n\
                      Unrecognized /commands are forwarded to the server."
                         .to_string(),
@@ -886,6 +952,10 @@ impl App {
                 self.line_cache.clear();
                 self.scroll_offset = 0;
                 false // fall through to send as prompt — server handles /reset
+            }
+            "/compact" => {
+                self.sys_msg("Compressing context…");
+                false // fall through to send as prompt — server handles /compact
             }
             "/title" => {
                 // Capture title locally for status bar, then forward to server
@@ -1044,6 +1114,8 @@ impl App {
     }
 
     pub fn handle_prompt_done(&mut self, _stop_reason: &str, usage: Option<Usage>) {
+        // Terminal bell — notifies backgrounded terminals that a turn finished
+        print!("\x07");
         // Compute elapsed time for turn summary
         let elapsed = self.animation.turn_start
             .map(|t| t.elapsed().as_secs_f64());
