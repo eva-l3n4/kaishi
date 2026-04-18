@@ -455,9 +455,9 @@ impl AcpClient {
     ) -> Result<(Vec<(String, String)>, usize)> {
         let result = self
             .request(
-                "_hermes/get_session_history",
+                "hermes/get_session_history",
                 Some(serde_json::json!({
-                    "session_id": session_id,
+                    "sessionId": session_id,
                     "limit": limit,
                     "offset": offset,
                 })),
@@ -498,7 +498,7 @@ impl AcpClient {
                 "session/new",
                 Some(serde_json::json!({
                     "cwd": cwd,
-                    "mcp_servers": [],
+                    "mcpServers": [],
                 })),
             )
             .await?;
@@ -516,7 +516,7 @@ impl AcpClient {
             "session/resume",
             Some(serde_json::json!({
                 "cwd": cwd,
-                "session_id": session_id,
+                "sessionId": session_id,
             })),
         )
         .await?;
@@ -527,7 +527,7 @@ impl AcpClient {
         self.request(
             "session/prompt",
             Some(serde_json::json!({
-                "session_id": session_id,
+                "sessionId": session_id,
                 "prompt": [{ "type": "text", "text": text }],
             })),
         )
@@ -537,7 +537,7 @@ impl AcpClient {
     pub async fn cancel(&self, session_id: &str) -> Result<()> {
         self.notify(
             "session/cancel",
-            Some(serde_json::json!({ "session_id": session_id })),
+            Some(serde_json::json!({ "sessionId": session_id })),
         )
         .await
     }
