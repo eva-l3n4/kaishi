@@ -709,6 +709,14 @@ fn render_message(
 
                 let content_color = if msg.content.starts_with('✗') {
                     palette::ERROR
+                } else if summary_line.starts_with('+') && !summary_line.starts_with("+++") {
+                    Color::Green
+                } else if summary_line.starts_with('-') && !summary_line.starts_with("---") {
+                    Color::Red
+                } else if summary_line.starts_with("@@ ") {
+                    Color::Cyan
+                } else if summary_line.starts_with("---") || summary_line.starts_with("+++") {
+                    Color::Yellow
                 } else {
                     Color::DarkGray
                 };

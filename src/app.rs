@@ -1174,6 +1174,14 @@ impl App {
         self.scroll_offset = 0;
     }
 
+    /// Check if text looks like a unified diff.
+    fn looks_like_diff(text: &str) -> bool {
+        let first = text.lines().next().unwrap_or("");
+        first.starts_with("--- ")
+            || first.starts_with("diff --git")
+            || (text.contains("\n+") && text.contains("\n-") && text.contains("\n@@ "))
+    }
+
     pub fn handle_tool_update(&mut self, id: &str, status: &str, content: Option<&str>) {
         if status == "completed" || status == "error" {
             self.active_tools.retain(|(tid, _)| tid != id);
@@ -1220,6 +1228,22 @@ impl App {
                         })
                         .unwrap_or(summary);
                     detail
+                } else if status == "completed" {
+                    // For completed tools, check if content contains a diff
+                    if let Some(text) = content {
+                        if Self::looks_like_diff(text) {
+                            // Append diff to summary for rendering
+                            if summary.is_empty() {
+                                text.to_string()
+                            } else {
+                                format!("{}\n{}", summary, text)
+                            }
+                        } else {
+                            summary
+                        }
+                    } else {
+                        summary
+                    }
                 } else {
                     summary
                 };
