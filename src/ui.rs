@@ -12,6 +12,30 @@ use crate::app::{AgentStatus, App, ChatMessage, ModalState, Role, Screen};
 use crate::ui_modal;
 use crate::ui_picker;
 
+// ─── Syntax highlighting (lazy-initialized) ──────────────────────
+use std::sync::OnceLock;
+use syntect::highlighting::{Theme, ThemeSet};
+use syntect::parsing::SyntaxSet;
+
+fn syntax_set() -> &'static SyntaxSet {
+    static SS: OnceLock<SyntaxSet> = OnceLock::new();
+    SS.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn syntax_theme() -> &'static Theme {
+    static TH: OnceLock<Theme> = OnceLock::new();
+    TH.get_or_init(|| {
+        let ts = ThemeSet::load_defaults();
+        // base16-eighties.dark is a good match for dark terminal themes
+        ts.themes
+            .get("base16-eighties.dark")
+            .cloned()
+            .unwrap_or_else(|| {
+                ts.themes.values().next().cloned().unwrap()
+            })
+    })
+}
+
 // ─── Palette (terminal-native — inherits from your theme) ──────
 mod palette {
     use ratatui::style::Color;
@@ -841,10 +865,14 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
         }
 
         if in_code_block {
-            lines.push(Line::from(Span::styled(
-                format!("{}│ {}", indent(narrow), raw_line),
-                Style::default().fg(palette::CODE_FG),
-            )));
+            // Syntax-highlighted code line
+            let highlighted_spans = highlight_code_line(raw_line, &code_lang);
+            let ind = indent(narrow);
+            let mut spans = vec![
+                Span::styled(format!("{}│ ", ind), Style::default().fg(Color::DarkGray)),
+            ];
+            spans.extend(highlighted_spans);
+            lines.push(Line::from(spans));
             continue;
         }
 
@@ -1092,6 +1120,59 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+/// Highlight a single line of code using syntect.
+/// Returns styled spans; falls back to green monochrome if language is unknown.
+fn highlight_code_line(line: &str, lang: &str) -> Vec<Span<'static>> {
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::FontStyle;
+
+    let ss = syntax_set();
+    let theme = syntax_theme();
+
+    // Try to find syntax by language token, file extension, or fall back to plain text
+    let syntax = if lang.is_empty() {
+        ss.find_syntax_plain_text()
+    } else {
+        ss.find_syntax_by_token(lang)
+            .or_else(|| ss.find_syntax_by_extension(lang))
+            .unwrap_or_else(|| ss.find_syntax_plain_text())
+    };
+
+    let mut h = HighlightLines::new(syntax, theme);
+    let line_with_newline = format!("{}\n", line);
+
+    match h.highlight_line(&line_with_newline, ss) {
+        Ok(ranges) => {
+            ranges
+                .iter()
+                .map(|(style, text)| {
+                    let text = text.trim_end_matches('\n').to_string();
+                    let fg = Color::Rgb(
+                        style.foreground.r,
+                        style.foreground.g,
+                        style.foreground.b,
+                    );
+                    let mut rat_style = Style::default().fg(fg);
+                    if style.font_style.contains(FontStyle::BOLD) {
+                        rat_style = rat_style.add_modifier(Modifier::BOLD);
+                    }
+                    if style.font_style.contains(FontStyle::ITALIC) {
+                        rat_style = rat_style.add_modifier(Modifier::ITALIC);
+                    }
+                    Span::styled(text, rat_style)
+                })
+                .collect()
+        }
+        Err(_) => {
+            // Fallback to monochrome green
+            vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(palette::CODE_FG),
+            )]
+        }
+    }
 }
 
 /// Strip a numbered list prefix like "1. " and return the rest.
