@@ -200,6 +200,9 @@ pub struct App {
     pub total_output_tokens: u64,
     pub prompt_count: u32,
 
+    // Approval bypass
+    pub yolo_mode: bool,
+
     quit: bool,
 }
 
@@ -245,6 +248,7 @@ impl App {
             total_input_tokens: 0,
             total_output_tokens: 0,
             prompt_count: 0,
+            yolo_mode: false,
             quit: false,
         }
     }
@@ -723,6 +727,23 @@ impl App {
                 self.input.truncate(self.cursor);
             }
 
+            // Shift+Tab: toggle yolo mode
+            (KeyModifiers::SHIFT, KeyCode::BackTab) | (_, KeyCode::BackTab) => {
+                self.yolo_mode = !self.yolo_mode;
+                let label = if self.yolo_mode { "on ⚡" } else { "off" };
+                self.sys_msg(format!("Approval bypass: {label}"));
+                self.line_cache.clear();
+                // Forward /yolo to server
+                if let Some(ref sid) = self.session_id {
+                    let session_id = sid.clone();
+                    let acp = Arc::clone(acp);
+                    tokio::spawn(async move {
+                        let _ = acp.prompt("/yolo", &session_id).await;
+                    });
+                }
+                return Ok(());
+            }
+
             // Text input
             (_, KeyCode::Tab) if self.status == AgentStatus::Idle && self.input.starts_with('/') => {
                 // Tab-complete slash commands: cycle through matches
@@ -963,6 +984,7 @@ impl App {
                      History: Up/Down arrows\n\
                      Word jump: Alt+Left/Right\n\
                      Thinking: Ctrl+O toggle expand\n\
+                     YOLO:    Shift+Tab toggle bypass\n\
                      Tab: complete /commands\n\
                      \n\
                      Shell escape:\n\
@@ -1007,6 +1029,14 @@ impl App {
                     self.session_title = Some(parts[1..].join(" "));
                 }
                 false // fall through to send as prompt — server handles /title
+            }
+            "/yolo" => {
+                self.yolo_mode = !self.yolo_mode;
+                self.sys_msg(format!(
+                    "Approval bypass: {}",
+                    if self.yolo_mode { "on ⚡" } else { "off" }
+                ));
+                false // fall through to send as prompt — server handles /yolo
             }
             _ => false,
         }

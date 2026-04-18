@@ -263,6 +263,14 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!(" {} ", model), Style::default().bg(bg).fg(palette::STATUS_FG)),
     ];
 
+    // YOLO mode indicator
+    if app.yolo_mode {
+        left_spans.push(Span::styled(
+            "│ ⚡yolo ",
+            Style::default().bg(bg).fg(Color::Yellow),
+        ));
+    }
+
     // Activity hint
     match &app.status {
         AgentStatus::Thinking => {
