@@ -131,6 +131,20 @@ pub enum Screen {
     Disconnected(String), // error message
 }
 
+#[derive(Debug, Clone)]
+pub struct PaletteEntry {
+    pub label: String,
+    pub keybind: Option<String>,
+    pub action: PaletteAction,
+}
+
+#[derive(Debug, Clone)]
+pub enum PaletteAction {
+    SlashCommand(String),
+    Keybind(String),
+    SetEffort(u8),
+}
+
 /// Modal overlay state.
 #[derive(Debug)]
 pub enum ModalState {
@@ -140,6 +154,27 @@ pub enum ModalState {
         options: Vec<ApprovalOption>,
         selected: usize,
         request_id: serde_json::Value,
+    },
+    CommandPalette {
+        query: String,
+        cursor: usize,
+        selected: usize,
+        filtered: Vec<PaletteEntry>,
+    },
+    EffortSlider {
+        level: u8, // 0=low, 1=medium, 2=high
+    },
+    ReverseSearch {
+        query: String,
+        cursor: usize,
+        match_index: Option<usize>,
+    },
+    FileAutocomplete {
+        query: String,
+        cursor_in_input: usize,
+        selected: usize,
+        entries: Vec<String>,
+        loading: bool,
     },
 }
 
@@ -255,6 +290,10 @@ impl App {
             editor_requested: false,
             quit: false,
         }
+    }
+
+    pub fn close_modal(&mut self) {
+        self.modal = ModalState::None;
     }
 
     pub fn should_quit(&self) -> bool {
