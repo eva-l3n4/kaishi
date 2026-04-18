@@ -89,6 +89,9 @@ pub enum AppEvent {
 
     // Slash command responses from ACP server
     SlashCommandResponse(String),
+
+    // Async file autocomplete scan results
+    FileScanResult(Vec<String>),
 }
 
 pub struct EventLoop {

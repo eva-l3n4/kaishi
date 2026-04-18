@@ -3,6 +3,7 @@ mod app;
 mod event;
 mod ui;
 mod ui_effort;
+mod ui_file_popup;
 mod ui_modal;
 mod ui_palette;
 mod ui_picker;
@@ -413,6 +414,17 @@ async fn run(
                     app.model_name = model.to_string();
                 } else {
                     app.sys_msg(text);
+                }
+            }
+            event::AppEvent::FileScanResult(entries) => {
+                if let app::ModalState::FileAutocomplete {
+                    entries: ref mut e,
+                    loading: ref mut l,
+                    ..
+                } = app.modal
+                {
+                    *e = entries;
+                    *l = false;
                 }
             }
             event::AppEvent::ReconnectRequested => {

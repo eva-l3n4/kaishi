@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::{AgentStatus, App, ChatMessage, ModalState, Role, Screen};
 use crate::ui_effort;
+use crate::ui_file_popup;
 use crate::ui_modal;
 use crate::ui_palette;
 use crate::ui_search;
@@ -232,7 +233,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ui_search::draw_reverse_search(frame, app);
         }
         ModalState::FileAutocomplete { .. } => {
-            // TODO: file autocomplete popup
+            ui_file_popup::draw_file_popup(frame, app);
         }
         ModalState::None => {}
     }

@@ -193,6 +193,30 @@ fn fuzzy_matches(query: &str, label: &str) -> bool {
     current.is_none()
 }
 
+fn scan_files(cwd: &str, query: &str, limit: usize) -> Vec<String> {
+    let mut results = Vec::new();
+    let walker = walkdir::WalkDir::new(cwd)
+        .max_depth(4)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.') && name != "node_modules" && name != "target"
+        });
+    for entry in walker.flatten() {
+        if entry.file_type().is_file() {
+            if let Ok(rel) = entry.path().strip_prefix(cwd) {
+                let s = rel.to_string_lossy().to_string();
+                if query.is_empty() || fuzzy_matches(query, &s) {
+                    results.push(s);
+                    if results.len() >= limit { break; }
+                }
+            }
+        }
+    }
+    results
+}
+
 /// Application state.
 pub struct App {
     pub screen: Screen,
@@ -916,6 +940,23 @@ impl App {
             (_, KeyCode::Char(c)) => {
                 self.input.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
+
+                if c == '@' {
+                    let cwd = cwd.to_string();
+                    let tx = self.event_tx.clone().unwrap();
+                    tokio::spawn(async move {
+                        let entries = scan_files(&cwd, "", 50);
+                        let _ = tx.send(AppEvent::FileScanResult(entries));
+                    });
+                    let at_pos = self.cursor - 1;
+                    self.modal = ModalState::FileAutocomplete {
+                        query: String::new(),
+                        cursor_in_input: at_pos,
+                        selected: 0,
+                        entries: vec![],
+                        loading: true,
+                    };
+                }
             }
             (_, KeyCode::Backspace)
                 if self.cursor > 0 =>
@@ -1633,7 +1674,7 @@ impl App {
         });
 
         // Track context window usage from the latest prompt
-        if let Some(ref u) = turn_usage {
+        if let Some(ref _u) = turn_usage {
             // input_tokens (the delta) is the context sent in this prompt
             // For context indicator, use the cumulative total as an approximation
             self.context_used = self.total_input_tokens;
