@@ -377,8 +377,8 @@ impl AcpClient {
         self.request(
             "initialize",
             Some(serde_json::json!({
-                "protocol_version": 1,
-                "client_info": {
+                "protocolVersion": 1,
+                "clientInfo": {
                     "name": "hermes-tui",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
