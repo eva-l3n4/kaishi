@@ -2,7 +2,7 @@
 //!
 //! Renders the child session's transcript using the same visual vocabulary
 //! as the parent chat view: `┌─ tool  ──` framed tool calls, `│ preview`
-//! content rows, dimmed reasoning prefixed with `├─ 💭`, and a minimal
+//! content rows, dimmed reasoning prefixed with `├─ `, and a minimal
 //! header/footer. Colors come exclusively from the `ui::palette` module —
 //! no hardcoded `Color::Rgb` and no raw `Color::Blue`/`Color::Magenta`
 //! that would clash with the Catppuccin theme remapping.
@@ -17,7 +17,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-pub fn draw_zoom(frame: &mut Frame, area: Rect, app: &App, child_session_id: &str) {
+pub fn draw_zoom(frame: &mut Frame, area: Rect, app: &mut App, child_session_id: &str) {
     let task = app.subagents.get(child_session_id);
 
     let subagent_count = app
@@ -57,8 +57,27 @@ pub fn draw_zoom(frame: &mut Frame, area: Rect, app: &App, child_session_id: &st
             Style::default().fg(palette::DIM),
         ))],
     };
+
+    // Stash geometry for key handlers + compute scroll position.
+    // Scroll semantics mirror the chat view: `subagent_zoom_scroll == 0`
+    // means pinned to bottom (newest content visible, auto-tails as new
+    // events stream in). Higher values scroll backward into history.
+    let content_rows = body_lines.len() as u16;
+    let viewport_rows = chunks[1].height;
+    app.subagent_zoom_content_rows = content_rows;
+    app.subagent_zoom_viewport_rows = viewport_rows;
+
+    let max_scroll = content_rows.saturating_sub(viewport_rows);
+    // Clamp against shrinking content (e.g. after switching subagents).
+    if app.subagent_zoom_scroll > max_scroll {
+        app.subagent_zoom_scroll = max_scroll;
+    }
+    // Ratatui's `Paragraph::scroll` is "rows-from-top". Our offset is
+    // "rows-from-bottom", so subtract from max to get the render value.
+    let scroll_from_top = max_scroll.saturating_sub(app.subagent_zoom_scroll);
+
     frame.render_widget(
-        Paragraph::new(body_lines).scroll((app.subagent_zoom_scroll, 0)),
+        Paragraph::new(body_lines).scroll((scroll_from_top, 0)),
         chunks[1],
     );
 
@@ -170,7 +189,7 @@ fn render_body(task: &SubagentTask, width: u16) -> Vec<Line<'static>> {
                 summary,
                 duration_seconds,
             } => {
-                render_complete(&mut lines, status, summary.as_deref(), *duration_seconds);
+                render_complete(&mut lines, status, summary.as_deref(), *duration_seconds, width);
             }
         }
     }
@@ -179,16 +198,14 @@ fn render_body(task: &SubagentTask, width: u16) -> Vec<Line<'static>> {
 }
 
 fn render_thinking(lines: &mut Vec<Line<'static>>, text: &str, width: u16) {
-    // "  ├─ 💭  <text, dim italic, wrapped>"
-    // Prefix uses no emoji except the thought bubble, which matches the
-    // existing spinner CLI output. Hardcoded glyph is intentional — matches
-    // get_tool_emoji conventions elsewhere in ui.rs.
-    let prefix_width = 6; // "  ├─ 💭  "
+    // "  ├─ <text, dim italic, wrapped>"
+    // Continuation lines align under the text, prefixed with "  │  ".
+    let prefix_width = 5; // "  ├─ "
     let body_width = (width as usize).saturating_sub(prefix_width + 2);
 
     let wrapped = wrap_plain(text, body_width);
     for (i, row) in wrapped.iter().enumerate() {
-        let prefix = if i == 0 { "  ├─ 💭  " } else { "  │       " };
+        let prefix = if i == 0 { "  ├─ " } else { "  │  " };
         lines.push(Line::from(vec![
             Span::styled(prefix.to_string(), Style::default().fg(palette::DIM)),
             Span::styled(
@@ -250,6 +267,7 @@ fn render_complete(
     status: &str,
     summary: Option<&str>,
     duration_seconds: Option<f64>,
+    width: u16,
 ) {
     let (glyph, color, label) = if status == "failed" {
         ("✗", palette::ERROR, "failed")
@@ -273,13 +291,15 @@ fn render_complete(
     lines.push(Line::from(spans));
 
     if let Some(s) = summary.map(str::trim).filter(|s| !s.is_empty()) {
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(
-                s.to_string(),
-                Style::default().fg(palette::TEXT),
-            ),
-        ]));
+        // Wrap the summary to the viewport so long multi-line summaries
+        // from the subagent don't clip off the right edge.
+        let max_line = (width as usize).saturating_sub(4); // "  " indent + slack
+        for row in wrap_plain(s, max_line) {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(row, Style::default().fg(palette::TEXT)),
+            ]));
+        }
     }
 }
 

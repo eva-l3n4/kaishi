@@ -246,7 +246,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         Screen::SubagentZoom { child_session_id } => {
             let area = frame.area();
-            ui_subagent_zoom::draw_zoom(frame, area, app, child_session_id);
+            let sid = child_session_id.clone();
+            ui_subagent_zoom::draw_zoom(frame, area, app, &sid);
         }
     }
 

@@ -404,8 +404,15 @@ pub struct App {
     // Subagent tasks (keyed by child_session_id)
     pub subagents: HashMap<String, SubagentTask>,
 
-    /// Scroll offset for the zoom view (0 = top of child transcript).
+    /// Scroll offset for the zoom view. `0` = pinned to bottom (newest
+    /// visible, auto-tails streaming content). Higher values scroll
+    /// backward into history. Mirrors the chat view's scroll semantics.
     pub subagent_zoom_scroll: u16,
+    /// Last-rendered total body rows (wrapped) for the zoom view.
+    /// Stashed by `draw_zoom` so key handlers can compute `max_scroll`.
+    pub subagent_zoom_content_rows: u16,
+    /// Last-rendered body viewport height (rows) for the zoom view.
+    pub subagent_zoom_viewport_rows: u16,
 
     // Input history
     pub input_history: Vec<String>,
@@ -480,6 +487,8 @@ impl App {
             tool_msg_map: HashMap::new(),
             subagents: HashMap::new(),
             subagent_zoom_scroll: 0,
+            subagent_zoom_content_rows: 0,
+            subagent_zoom_viewport_rows: 0,
             input_history: Vec::new(),
             history_index: None,
             saved_input: String::new(),
@@ -1624,15 +1633,32 @@ impl App {
                 }
             }
             KeyCode::Up => {
-                if self.subagent_zoom_scroll == 0 {
+                // Scroll backward into history. If already at the top
+                // of history (max_scroll), bounce back to parent chat —
+                // preserves the existing "up from the top exits" gesture.
+                let max = self
+                    .subagent_zoom_content_rows
+                    .saturating_sub(self.subagent_zoom_viewport_rows);
+                if self.subagent_zoom_scroll >= max {
                     self.screen = Screen::Chat;
                 } else {
-                    self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_sub(1);
+                    self.subagent_zoom_scroll =
+                        self.subagent_zoom_scroll.saturating_add(1).min(max);
                 }
             }
-            KeyCode::Down => self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_add(1),
-            KeyCode::PageUp => self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_sub(10),
-            KeyCode::PageDown => self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_add(10),
+            KeyCode::Down => {
+                self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_sub(1);
+            }
+            KeyCode::PageUp => {
+                let max = self
+                    .subagent_zoom_content_rows
+                    .saturating_sub(self.subagent_zoom_viewport_rows);
+                self.subagent_zoom_scroll =
+                    self.subagent_zoom_scroll.saturating_add(10).min(max);
+            }
+            KeyCode::PageDown => {
+                self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_sub(10);
+            }
             _ => {}
         }
         Ok(())
@@ -2222,6 +2248,23 @@ impl App {
                     }
                 } else {
                     self.scroll_offset = self.scroll_offset.saturating_sub((-delta) as u16);
+                }
+            }
+            Screen::SubagentZoom { .. } => {
+                // Same semantics as the chat view:
+                // delta > 0 = wheel up → scroll backward into history (increase offset).
+                // delta < 0 = wheel down → scroll toward newest (decrease offset).
+                let max = self
+                    .subagent_zoom_content_rows
+                    .saturating_sub(self.subagent_zoom_viewport_rows);
+                if delta > 0 {
+                    self.subagent_zoom_scroll = self
+                        .subagent_zoom_scroll
+                        .saturating_add(delta as u16)
+                        .min(max);
+                } else {
+                    self.subagent_zoom_scroll =
+                        self.subagent_zoom_scroll.saturating_sub((-delta) as u16);
                 }
             }
             _ => {}
