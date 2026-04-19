@@ -79,11 +79,11 @@ fn draw_session_list(
         render_session_card(&mut lines, session, is_selected, inner_width, narrow);
     }
 
-    // Scrolling
+    // Scrolling — scroll_offset counts from the top, 0 = top of list
     let total_lines = lines.len() as u16;
     let visible_height = area.height;
     let max_scroll = total_lines.saturating_sub(visible_height);
-    let scroll_pos = max_scroll.saturating_sub(scroll_offset.min(max_scroll));
+    let scroll_pos = scroll_offset.min(max_scroll);
 
     let paragraph = Paragraph::new(Text::from(lines)).scroll((scroll_pos, 0));
 
