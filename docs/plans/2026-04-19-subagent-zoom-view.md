@@ -1,5 +1,7 @@
 # Subagent Zoom View Implementation Plan
 
+> **Status: SHIPPED 2026-04-19** — see commit table at bottom.
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
 
 **Goal:** Let the user click a running subagent task in Kaishi to zoom into a full-screen live view of that child session, and pop back out with a single keystroke, without interacting with the child.
@@ -517,9 +519,41 @@ Mitigation: `_hermes/get_session_history` already returns structured content blo
 
 ## Verification Before Completion
 
-- [ ] `pytest tests/acp_adapter/test_events.py -v` green
-- [ ] `pytest tests/tools/test_delegate_tool.py -v` green (no regression)
-- [ ] `cargo check` on hermes-tui clean
-- [ ] `cargo clippy -- -D warnings` on hermes-tui clean
-- [ ] Manual end-to-end flow from Task 9 succeeds
-- [ ] Batch mode (3 parallel tasks) zooms independently
+- [x] `pytest tests/acp/test_events.py -v` green (21 passed)
+- [x] `pytest tests/tools/test_delegate.py -v` green (69 passed, +2 new regression tests)
+- [x] `cargo check` on hermes-tui clean
+- [x] `cargo clippy -- -D warnings` on hermes-tui clean
+- [x] All 31 hermes-tui tests pass
+- [ ] Manual end-to-end flow from Task 9 (Eva's responsibility — pending)
+- [ ] Batch mode (3 parallel tasks) zooms independently (pending Task 9)
+
+---
+
+## Shipped Commits (2026-04-19)
+
+Implementation completed via `subagent-driven-development` skill — fresh subagent per task with spec compliance review between Hermes-side tasks.
+
+| Task | Repo | Commit | What |
+|------|------|--------|------|
+| 1 | hermes-agent | `5a1d2d0` | feat(delegate): plumb child_session_id through progress callback |
+| 2 | hermes-agent | `1fb50c3` | feat(acp): bridge subagent.* events to `_hermes/subagent_update` |
+| 3 | hermes-agent | `27e5f32` | feat(delegate): include status and duration_seconds in subagent.complete events (no-op for code, +2 regression tests) |
+| 4 | hermes-tui | `7843142` | feat(acp): parse `_hermes/subagent_update` into SubagentUpdate events |
+| 5 | hermes-tui | `4188955` | feat(ui): render subagent task line in transcript with live status |
+| 6 | hermes-tui | `3060f1c` | feat(ui): subagent zoom view — Ctrl+Z zooms into child session, ↑/Esc returns |
+| 7 | hermes-tui | `dff8b2f` | feat(ui): batch subagent cycling — Ctrl+Z in zoom cycles through siblings |
+| 8 | hermes-agent | `bb1393d` | docs(acp): note grandchild assumption in subagent bridge |
+
+### Plan-vs-reality notes
+
+- **Task 1** ended up using a `_state` mutable dict instead of `setattr` on the callback to handle Python's forward-reference scoping cleanly. Better than what the plan proposed.
+- **Task 3** turned out to be a no-op: the `subagent.complete` emission sites in `delegate_tool.py` already carried `status` + `duration_seconds`. The implementer wisely added regression tests instead of unnecessary code changes.
+- **Task 5** required some manual cleanup after the implementer hit its iteration cap — three small fixes (a missing `Role::Subagent` arm in the `/save` exporter match, an unused import, and using `ind` instead of hardcoded `"  "` for indent so narrow viewports work). Worth noting: large UI tasks with many cross-file touches benefit from a higher `max_iterations` for the subagent.
+- **Task 6** chose `Ctrl+Z` (Zoom mnemonic) for the zoom keybinding after confirming no conflict with existing chat bindings.
+- **Task 7** scoped down to just the cycling feature (Ctrl+Z while in zoom cycles to next subagent). Sibling status header and transcript grouping were skipped as risky relative to value — the existing `[1/3]` prefix was already informative enough.
+
+### Known follow-ups for future work
+
+- **History replay on join.** The plan envisioned calling `_hermes/get_session_history` when entering the zoom view, in case Kaishi joined mid-stream (e.g. on reconnect). Skipped for the initial ship — the zoom currently renders only what's been buffered live in `SubagentTask.events`. Marked with `TODO(task-9)` in `src/ui_subagent_zoom.rs`. Not blocking.
+- **Cursor-on-task-line zoom.** Ctrl+Z always picks the most recent Role::Subagent in transcript order. A future iteration could let the user move a cursor to any task line and zoom into that one. Pleasant-to-have, not needed yet.
+- **Grandchild support.** If `MAX_DEPTH` is ever raised in `delegate_tool.py`, the bridge degrades gracefully (unknown `child_session_id` creates a new task line) but the zoom view would need breadcrumbs/nesting. See comment in `acp_adapter/events.py` above `_emit_subagent_update`.

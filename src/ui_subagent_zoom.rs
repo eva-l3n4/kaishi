@@ -1,187 +1,396 @@
-use crate::app::{App, Role, SubagentStatus, SubagentTranscriptKind};
+//! Full-screen zoom view for a delegated subagent.
+//!
+//! Renders the child session's transcript using the same visual vocabulary
+//! as the parent chat view: `┌─ tool  ──` framed tool calls, `│ preview`
+//! content rows, dimmed reasoning prefixed with `├─ 💭`, and a minimal
+//! header/footer. Colors come exclusively from the `ui::palette` module —
+//! no hardcoded `Color::Rgb` and no raw `Color::Blue`/`Color::Magenta`
+//! that would clash with the Catppuccin theme remapping.
+
+use crate::app::{App, Role, SubagentStatus, SubagentTask, SubagentTranscriptKind};
+use crate::ui::palette;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 pub fn draw_zoom(frame: &mut Frame, area: Rect, app: &App, child_session_id: &str) {
     let task = app.subagents.get(child_session_id);
 
-    // Count total subagents for cycling hint
     let subagent_count = app
         .messages
         .iter()
         .filter(|m| matches!(m.role, Role::Subagent))
         .count();
 
-    // Layout: header bar (3 rows) + body + footer hint (1 row)
+    // Layout: header (2 rows) + body (rest) + footer (1 row).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
         .split(area);
 
-    // --- Header ---
-    let header_text = match task {
-        Some(t) => render_header_line(t),
+    // ── Header ──
+    let header_lines: Vec<Line> = match task {
+        Some(t) => render_header(t, chunks[0].width),
+        None => vec![
+            Line::from(Span::styled(
+                "  ⎇  subagent (unknown)",
+                Style::default().fg(palette::DIM),
+            )),
+            Line::from(""),
+        ],
+    };
+    frame.render_widget(Paragraph::new(header_lines), chunks[0]);
+
+    // ── Body ──
+    let body_lines: Vec<Line> = match task {
+        Some(t) => render_body(t, chunks[1].width),
         None => vec![Line::from(Span::styled(
-            "  ← subagent (unknown)",
-            Style::default().fg(Color::DarkGray),
+            "  (no events recorded yet)",
+            Style::default().fg(palette::DIM),
         ))],
     };
-    let header = Paragraph::new(header_text).block(
-        Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
+    frame.render_widget(
+        Paragraph::new(body_lines).scroll((app.subagent_zoom_scroll, 0)),
+        chunks[1],
     );
-    frame.render_widget(header, chunks[0]);
 
-    // --- Body ---
-    let body_lines: Vec<Line> = match task {
-        Some(t) => render_body_lines(t, chunks[1].width),
-        None => vec![Line::from(
-            "  (no events recorded yet — waiting for subagent to report)",
-        )],
-    };
-    let body = Paragraph::new(body_lines).scroll((app.subagent_zoom_scroll, 0));
-    frame.render_widget(body, chunks[1]);
-
-    // --- Footer ---
+    // ── Footer ──
     let mut footer_spans = vec![
-        Span::styled("  ↑", Style::default().fg(Color::Yellow)),
-        Span::styled(" back to parent   ", Style::default().fg(Color::DarkGray)),
-        Span::styled("↓/PageDown", Style::default().fg(Color::Yellow)),
-        Span::styled(" scroll   ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  ↑", Style::default().fg(palette::ACCENT_SYSTEM)),
+        Span::styled(" parent   ", Style::default().fg(palette::DIM)),
+        Span::styled("↓ PgDn", Style::default().fg(palette::ACCENT_SYSTEM)),
+        Span::styled(" scroll   ", Style::default().fg(palette::DIM)),
     ];
-    // Add cycling hint if there are multiple subagents
     if subagent_count > 1 {
-        footer_spans.push(Span::styled("Ctrl+Z", Style::default().fg(Color::Yellow)));
-        footer_spans.push(Span::styled(" next   ", Style::default().fg(Color::DarkGray)));
+        footer_spans.push(Span::styled(
+            "^Z",
+            Style::default().fg(palette::ACCENT_SYSTEM),
+        ));
+        footer_spans.push(Span::styled(" next   ", Style::default().fg(palette::DIM)));
     }
-    footer_spans.push(Span::styled("Esc", Style::default().fg(Color::Yellow)));
-    footer_spans.push(Span::styled(" exit zoom", Style::default().fg(Color::DarkGray)));
-    let footer = Paragraph::new(Line::from(footer_spans));
-    frame.render_widget(footer, chunks[2]);
+    footer_spans.push(Span::styled(
+        "Esc",
+        Style::default().fg(palette::ACCENT_SYSTEM),
+    ));
+    footer_spans.push(Span::styled(" exit", Style::default().fg(palette::DIM)));
+    frame.render_widget(Paragraph::new(Line::from(footer_spans)), chunks[2]);
 }
 
-fn render_header_line(task: &crate::app::SubagentTask) -> Vec<Line<'static>> {
-    let mut left_spans = vec![
-        Span::styled("  \u{2190} ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!(
-                "\u{2387} Subagent [{}/{}] ",
-                task.task_index + 1,
-                task.task_count
-            ),
-            Style::default().fg(Color::Magenta),
+// ───────────────────────── header ─────────────────────────
+
+fn render_header(task: &SubagentTask, width: u16) -> Vec<Line<'static>> {
+    // Row 1: "  ⎇  [n/N]  ● status · duration"
+    // Row 2: "  <goal, dim, wrapped/truncated>"
+    let (dot, dot_color, status_text) = match task.status {
+        SubagentStatus::Running => ("●", palette::ACCENT_SYSTEM, "running".to_string()),
+        SubagentStatus::Done => (
+            "●",
+            palette::SUCCESS,
+            task.duration_seconds
+                .map(|d| format!("done · {}", fmt_duration(d)))
+                .unwrap_or_else(|| "done".to_string()),
         ),
+        SubagentStatus::Failed => (
+            "●",
+            palette::ERROR,
+            task.duration_seconds
+                .map(|d| format!("failed · {}", fmt_duration(d)))
+                .unwrap_or_else(|| "failed".to_string()),
+        ),
+    };
+
+    let mut row1 = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled("⎇  ", Style::default().fg(palette::ACCENT_ASSISTANT)),
+    ];
+    if task.task_count > 1 {
+        row1.push(Span::styled(
+            format!("[{}/{}]  ", task.task_index + 1, task.task_count),
+            Style::default().fg(palette::DIM),
+        ));
+    }
+    row1.push(Span::styled(dot.to_string(), Style::default().fg(dot_color)));
+    row1.push(Span::styled(
+        format!(" {}", status_text),
+        Style::default().fg(palette::DIM),
+    ));
+
+    // Row 2: goal, dimmed. Truncate to viewport with ellipsis if needed.
+    let max_goal_width = (width as usize).saturating_sub(4); // "  " prefix + room
+    let goal_display = truncate_display(&task.goal, max_goal_width);
+    let row2 = vec![
+        Span::styled("  ", Style::default()),
         Span::styled(
-            task.goal.clone(),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            goal_display,
+            Style::default().fg(palette::TEXT).add_modifier(Modifier::BOLD),
         ),
     ];
-    let status = match task.status {
-        SubagentStatus::Running => {
-            Span::styled("   running", Style::default().fg(Color::Yellow))
-        }
-        SubagentStatus::Done => {
-            let dur = task
-                .duration_seconds
-                .map(|d| format!(" \u{2713} {:.1}s", d))
-                .unwrap_or_else(|| " \u{2713}".into());
-            Span::styled(format!("  {}", dur), Style::default().fg(Color::Green))
-        }
-        SubagentStatus::Failed => {
-            let dur = task
-                .duration_seconds
-                .map(|d| format!(" \u{2717} {:.1}s", d))
-                .unwrap_or_else(|| " \u{2717}".into());
-            Span::styled(format!("  {}", dur), Style::default().fg(Color::Red))
-        }
-    };
-    left_spans.push(status);
-    vec![Line::from(left_spans), Line::from("")]
+
+    vec![Line::from(row1), Line::from(row2)]
 }
 
-fn render_body_lines(task: &crate::app::SubagentTask, _width: u16) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for ev in &task.events {
+// ───────────────────────── body ─────────────────────────
+
+fn render_body(task: &SubagentTask, width: u16) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = Vec::new();
+
+    if task.events.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  (waiting for subagent to report)",
+            Style::default().fg(palette::DIM),
+        )));
+        return lines;
+    }
+
+    for (i, ev) in task.events.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from(""));
+        }
         match &ev.kind {
-            SubagentTranscriptKind::Start { goal } => {
-                lines.push(Line::from(vec![
-                    Span::styled("\u{25b8} ", Style::default().fg(Color::Magenta)),
-                    Span::styled("Started: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(goal.clone(), Style::default().fg(Color::Cyan)),
-                ]));
-                lines.push(Line::from(""));
+            SubagentTranscriptKind::Start { .. } => {
+                // Redundant with the header; skip in body.
             }
             SubagentTranscriptKind::Thinking { text } => {
-                lines.push(Line::from(vec![
-                    Span::styled("\u{1f4ad} ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        text.clone(),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                ]));
+                render_thinking(&mut lines, text, width);
             }
             SubagentTranscriptKind::Tool { name, preview } => {
-                let mut spans = vec![
-                    Span::styled("\u{2192} ", Style::default().fg(Color::Blue)),
-                    Span::styled(
-                        name.clone(),
-                        Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
-                    ),
-                ];
-                if let Some(p) = preview {
-                    spans.push(Span::styled(
-                        format!("  {}", p),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                lines.push(Line::from(spans));
+                render_tool_box(&mut lines, name, preview.as_deref(), width);
             }
             SubagentTranscriptKind::Complete {
                 status,
                 summary,
                 duration_seconds,
             } => {
-                lines.push(Line::from(""));
-                let glyph = if status == "failed" { "\u{2717}" } else { "\u{2713}" };
-                let color = if status == "failed" {
-                    Color::Red
-                } else {
-                    Color::Green
-                };
-                let dur_str = duration_seconds
-                    .map(|d| format!(" ({:.1}s)", d))
-                    .unwrap_or_default();
-                let mut spans = vec![Span::styled(
-                    format!("{} Complete{}", glyph, dur_str),
-                    Style::default().fg(color),
-                )];
-                if let Some(s) = summary {
-                    spans.push(Span::styled(
-                        format!("  \u{2014} {}", s),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                lines.push(Line::from(spans));
+                render_complete(&mut lines, status, summary.as_deref(), *duration_seconds);
             }
         }
     }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  (waiting for subagent to report\u{2026})",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
+
     lines
+}
+
+fn render_thinking(lines: &mut Vec<Line<'static>>, text: &str, width: u16) {
+    // "  ├─ 💭  <text, dim italic, wrapped>"
+    // Prefix uses no emoji except the thought bubble, which matches the
+    // existing spinner CLI output. Hardcoded glyph is intentional — matches
+    // get_tool_emoji conventions elsewhere in ui.rs.
+    let prefix_width = 6; // "  ├─ 💭  "
+    let body_width = (width as usize).saturating_sub(prefix_width + 2);
+
+    let wrapped = wrap_plain(text, body_width);
+    for (i, row) in wrapped.iter().enumerate() {
+        let prefix = if i == 0 { "  ├─ 💭  " } else { "  │       " };
+        lines.push(Line::from(vec![
+            Span::styled(prefix.to_string(), Style::default().fg(palette::DIM)),
+            Span::styled(
+                row.clone(),
+                Style::default()
+                    .fg(palette::DIM)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    }
+}
+
+fn render_tool_box(lines: &mut Vec<Line<'static>>, name: &str, preview: Option<&str>, width: u16) {
+    // Matches the parent transcript's framed tool call style:
+    //   ┌─ tool_name ───────────
+    //   │ preview line 1
+    //   │ preview line 2
+    //   └─
+    let accent = palette::ACCENT_USER; // cyan in Catppuccin → matches existing tool accent
+
+    let header_text = format!("{} ", name);
+    let ind_len = 2; // "  " leading indent
+    let remaining = (width as usize).saturating_sub(ind_len + 3 + header_text.len());
+    let rule = "─".repeat(remaining.min(60));
+
+    lines.push(Line::from(vec![
+        Span::styled("  ┌─ ".to_string(), Style::default().fg(palette::BORDER)),
+        Span::styled(
+            name.to_string(),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", rule),
+            Style::default().fg(palette::BORDER),
+        ),
+    ]));
+
+    if let Some(p) = preview {
+        let p = p.trim();
+        if !p.is_empty() {
+            let max_line = (width as usize).saturating_sub(ind_len + 3);
+            for row in wrap_plain(p, max_line) {
+                lines.push(Line::from(vec![
+                    Span::styled("  │ ".to_string(), Style::default().fg(palette::BORDER)),
+                    Span::styled(row, Style::default().fg(palette::TEXT)),
+                ]));
+            }
+        }
+    }
+
+    lines.push(Line::from(Span::styled(
+        "  └─".to_string(),
+        Style::default().fg(palette::BORDER),
+    )));
+}
+
+fn render_complete(
+    lines: &mut Vec<Line<'static>>,
+    status: &str,
+    summary: Option<&str>,
+    duration_seconds: Option<f64>,
+) {
+    let (glyph, color, label) = if status == "failed" {
+        ("✗", palette::ERROR, "failed")
+    } else {
+        ("✓", palette::SUCCESS, "complete")
+    };
+
+    let mut spans = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("{} {}", glyph, label),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(d) = duration_seconds {
+        spans.push(Span::styled(
+            format!(" · {}", fmt_duration(d)),
+            Style::default().fg(palette::DIM),
+        ));
+    }
+    lines.push(Line::from(spans));
+
+    if let Some(s) = summary.map(str::trim).filter(|s| !s.is_empty()) {
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                s.to_string(),
+                Style::default().fg(palette::TEXT),
+            ),
+        ]));
+    }
+}
+
+// ───────────────────────── helpers ─────────────────────────
+
+fn fmt_duration(secs: f64) -> String {
+    if secs < 10.0 {
+        format!("{:.1}s", secs)
+    } else if secs < 60.0 {
+        format!("{:.0}s", secs)
+    } else {
+        let m = (secs / 60.0) as u64;
+        let s = (secs as u64) % 60;
+        format!("{}m{:02}s", m, s)
+    }
+}
+
+/// Truncate by display width (not byte length); appends a single-character
+/// horizontal ellipsis when clipped.
+fn truncate_display(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let count = s.chars().count();
+    if count <= max {
+        return s.to_string();
+    }
+    let keep: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{keep}…")
+}
+
+/// Dumb word-wrap by characters, preserving existing newlines.
+/// Keeps it simple — no soft-break heuristics, just fits words to width.
+fn wrap_plain(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    for raw_line in text.lines() {
+        let mut current = String::new();
+        let mut current_width = 0usize;
+        for word in raw_line.split_whitespace() {
+            let w_width = word.chars().count();
+            if current_width == 0 {
+                if w_width > width {
+                    // force-break very long token
+                    let mut buf = String::new();
+                    for ch in word.chars() {
+                        if buf.chars().count() >= width {
+                            out.push(std::mem::take(&mut buf));
+                        }
+                        buf.push(ch);
+                    }
+                    current = buf;
+                    current_width = current.chars().count();
+                } else {
+                    current.push_str(word);
+                    current_width = w_width;
+                }
+            } else if current_width + 1 + w_width <= width {
+                current.push(' ');
+                current.push_str(word);
+                current_width += 1 + w_width;
+            } else {
+                out.push(std::mem::take(&mut current));
+                current.push_str(word);
+                current_width = w_width;
+            }
+        }
+        out.push(current);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_shorter_than_max_is_unchanged() {
+        assert_eq!(truncate_display("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_appends_ellipsis() {
+        assert_eq!(truncate_display("hello world", 6), "hello…");
+    }
+
+    #[test]
+    fn truncate_zero_max_is_empty() {
+        assert_eq!(truncate_display("hello", 0), "");
+    }
+
+    #[test]
+    fn wrap_short_text_is_single_row() {
+        assert_eq!(wrap_plain("hi there", 80), vec!["hi there".to_string()]);
+    }
+
+    #[test]
+    fn wrap_splits_on_word_boundaries() {
+        let rows = wrap_plain("one two three four five", 9);
+        assert_eq!(rows, vec!["one two".to_string(), "three".to_string(), "four five".to_string()]);
+    }
+
+    #[test]
+    fn fmt_duration_scales() {
+        assert_eq!(fmt_duration(2.5), "2.5s");
+        assert_eq!(fmt_duration(42.0), "42s");
+        assert_eq!(fmt_duration(125.0), "2m05s");
+    }
 }

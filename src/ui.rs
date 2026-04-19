@@ -960,7 +960,7 @@ fn render_subagent_line(
     let Some(task) = app.subagents.get(child_id) else {
         lines.push(Line::from(Span::styled(
             format!("  {} (unknown subagent)", '\u{2387}'),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::DIM),
         )));
         return;
     };
@@ -984,7 +984,7 @@ fn render_subagent_line(
 
     // ── Status dot ──
     let (dot, dot_color) = match task.status {
-        SubagentStatus::Running => ("●", Color::Yellow),
+        SubagentStatus::Running => ("●", palette::ACCENT_SYSTEM),
         SubagentStatus::Done => ("●", palette::SUCCESS),
         SubagentStatus::Failed => ("●", palette::ERROR),
     };
@@ -1033,9 +1033,9 @@ fn render_subagent_line(
                     vec![
                         Span::styled(
                             format!("→ {}", tool_name),
-                            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                            Style::default().fg(palette::DIM).add_modifier(Modifier::ITALIC),
                         ),
-                        Span::styled(preview, Style::default().fg(Color::DarkGray)),
+                        Span::styled(preview, Style::default().fg(palette::DIM)),
                     ],
                     true,
                 ))
