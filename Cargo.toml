@@ -1,6 +1,6 @@
 [package]
 name = "kaishi"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 authors = ["EvaL3n4"]
 description = "懐紙 Kaishi — Terminal UI for Hermes Agent, speaking ACP over stdio"

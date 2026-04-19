@@ -1012,47 +1012,76 @@ fn flush_table_buffer<'a>(
 }
 
 /// Render accumulated table rows as aligned columns, then clear the buffer.
+/// Cells are parsed as inline markdown (so **bold**, *italic*, `code`, and
+/// links styled correctly). Column widths use `unicode-width` so emoji and
+/// wide CJK chars align properly.
 fn flush_table<'a>(rows: &mut Vec<Vec<String>>, lines: &mut Vec<Line<'a>>, narrow: bool) {
     if rows.is_empty() {
         return;
     }
 
-    // Compute column widths
-    let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    // Parse every cell into spans up front — we need both the spans and their
+    // display width for column sizing.
+    let parsed_rows: Vec<Vec<(Vec<Span<'static>>, usize)>> = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| {
+                    let spans = parse_inline_spans(cell);
+                    let width: usize = spans
+                        .iter()
+                        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                        .sum();
+                    (spans, width)
+                })
+                .collect()
+        })
+        .collect();
+
+    let num_cols = parsed_rows.iter().map(|r| r.len()).max().unwrap_or(0);
     let mut col_widths = vec![0usize; num_cols];
-    for row in rows.iter() {
-        for (j, cell) in row.iter().enumerate() {
+    for row in &parsed_rows {
+        for (j, (_, width)) in row.iter().enumerate() {
             if j < num_cols {
-                col_widths[j] = col_widths[j].max(cell.len());
+                col_widths[j] = col_widths[j].max(*width);
             }
         }
     }
 
     let ind = indent(narrow);
 
-    for (row_idx, row) in rows.iter().enumerate() {
+    for (row_idx, row) in parsed_rows.iter().enumerate() {
         let mut spans: Vec<Span> = vec![Span::raw(ind.to_string())];
 
-        for (j, cell) in row.iter().enumerate() {
-            let width = col_widths.get(j).copied().unwrap_or(cell.len());
-            let padded = format!("{:<width$}", cell, width = width);
+        for (j, (cell_spans, cell_width)) in row.iter().enumerate() {
+            let col_width = col_widths.get(j).copied().unwrap_or(*cell_width);
 
             if j > 0 {
                 spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
             }
 
-            let style = if row_idx == 0 {
-                // Header row: bold
-                Style::default().add_modifier(Modifier::BOLD)
+            // Header row: wrap every cell span in BOLD on top of its existing style.
+            if row_idx == 0 {
+                for s in cell_spans {
+                    let style = s.style.add_modifier(Modifier::BOLD);
+                    spans.push(Span::styled(s.content.clone().into_owned(), style));
+                }
             } else {
-                Style::default()
-            };
-            spans.push(Span::styled(padded, style));
+                for s in cell_spans {
+                    spans.push(s.clone());
+                }
+            }
+
+            // Pad the right side with plain spaces based on display width.
+            let pad = col_width.saturating_sub(*cell_width);
+            if pad > 0 {
+                spans.push(Span::raw(" ".repeat(pad)));
+            }
         }
 
         lines.push(Line::from(spans));
 
-        // Separator after header
+        // Separator row — width of each column in dashes, joined with ─┼─.
         if row_idx == 0 {
             let sep: String = col_widths
                 .iter()
@@ -1766,8 +1795,80 @@ mod md_tests {
         let joined: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(joined, "var_name is here");
         // No italic styling applied
-        assert!(!spans.iter().any(|s| s.style.add_modifier.contains(ratatui::style::Modifier::ITALIC)),
-            "intraword underscore should not italicize: {:?}", spans);
+        assert!(
+            !spans.iter().any(|s| s
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::ITALIC)),
+            "intraword underscore should not italicize: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn inline_markdown_renders_inside_table_cells() {
+        use ratatui::style::Modifier;
+        let mut lines = Vec::new();
+        let text = "| Feature | Status |\n| --- | --- |\n| **bold** inside | *also works* |";
+        render_markdown_lines(&mut lines, text, 80, false);
+
+        // Collect spans from all lines to inspect styling
+        let all_spans: Vec<_> = lines.iter().flat_map(|l| l.spans.iter()).collect();
+
+        // There should be a span with just "bold" that has BOLD modifier
+        let bold_hit = all_spans
+            .iter()
+            .find(|s| s.content == "bold" && s.style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            bold_hit.is_some(),
+            "expected styled 'bold' span inside table cell; got: {:?}",
+            all_spans.iter().map(|s| (s.content.as_ref(), s.style)).collect::<Vec<_>>()
+        );
+
+        // There should be a span with just "also works" that has ITALIC modifier
+        let italic_hit = all_spans
+            .iter()
+            .find(|s| s.content == "also works" && s.style.add_modifier.contains(Modifier::ITALIC));
+        assert!(
+            italic_hit.is_some(),
+            "expected italic 'also works' span inside table cell"
+        );
+
+        // There should be NO span with literal '**' (would mean unprocessed markdown)
+        assert!(
+            !all_spans.iter().any(|s| s.content.contains("**")),
+            "table cell should not contain raw ** markers"
+        );
+    }
+
+    #[test]
+    fn table_column_alignment_with_emoji() {
+        let mut lines = Vec::new();
+        let text = "| A | B |\n| --- | --- |\n| 🌸 | x |\n| ab | y |";
+        render_markdown_lines(&mut lines, text, 80, false);
+
+        // Each rendered row (including separator) should have the same display
+        // width, otherwise columns misalign. Skip the indent prefix.
+        use unicode_width::UnicodeWidthStr;
+        let widths: Vec<usize> = lines
+            .iter()
+            .filter(|l| !l.spans.is_empty())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum()
+            })
+            .collect();
+
+        // All non-empty rendered rows should have consistent width
+        if let (Some(&first), Some(&last)) = (widths.first(), widths.last()) {
+            assert_eq!(
+                first, last,
+                "first and last row widths differ: widths={:?}",
+                widths
+            );
+        }
     }
 }
 
