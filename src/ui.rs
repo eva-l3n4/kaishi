@@ -266,22 +266,12 @@ fn draw_chat(frame: &mut Frame, app: &mut App) {
             Constraint::Length(1),            // Status bar
             Constraint::Min(5),               // Messages
             Constraint::Length(input_height), // Input
-            Constraint::Length(1),            // Hint row
         ])
         .split(area);
 
     draw_status_bar(frame, app, chunks[0]);
     draw_messages(frame, app, chunks[1]);
     draw_input(frame, app, chunks[2]);
-    draw_hint_row(frame, chunks[3]);
-}
-
-fn draw_hint_row(frame: &mut Frame, area: Rect) {
-    let hint = Line::from(Span::styled(
-        " Ctrl+P palette · Ctrl+B sessions · Ctrl+D quit",
-        Style::default().fg(palette::DIM),
-    ));
-    frame.render_widget(Paragraph::new(hint), area);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -1378,11 +1368,11 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
 
     // Key hints in bottom border (only when idle)
     let bottom_hint = if is_idle && app.input.is_empty() {
-        " esc quit · / commands "
+        " Ctrl+P palette · Ctrl+B sessions · Ctrl+D quit "
     } else if is_idle {
-        " esc quit · enter send "
+        " enter send · Ctrl+J newline "
     } else {
-        " ctrl+c cancel "
+        " Ctrl+C cancel "
     };
 
     let block = Block::default()
