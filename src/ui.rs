@@ -16,6 +16,7 @@ use crate::ui_modal;
 use crate::ui_palette;
 use crate::ui_search;
 use crate::ui_picker;
+use crate::ui_subagent_zoom;
 
 // ─── Syntax highlighting (lazy-initialized) ──────────────────────
 use std::sync::OnceLock;
@@ -242,6 +243,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         Screen::Disconnected(err) => {
             draw_disconnected(frame, err);
+        }
+        Screen::SubagentZoom { child_session_id } => {
+            let area = frame.area();
+            ui_subagent_zoom::draw_zoom(frame, area, app, child_session_id);
         }
     }
 

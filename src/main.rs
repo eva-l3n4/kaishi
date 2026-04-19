@@ -9,6 +9,7 @@ mod ui_modal;
 mod ui_palette;
 mod ui_picker;
 mod ui_search;
+mod ui_subagent_zoom;
 
 use anyhow::Result;
 use app::App;

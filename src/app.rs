@@ -172,6 +172,7 @@ pub enum Screen {
     Picker,
     Chat,
     Disconnected(String), // error message
+    SubagentZoom { child_session_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -403,6 +404,9 @@ pub struct App {
     // Subagent tasks (keyed by child_session_id)
     pub subagents: HashMap<String, SubagentTask>,
 
+    /// Scroll offset for the zoom view (0 = top of child transcript).
+    pub subagent_zoom_scroll: u16,
+
     // Input history
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
@@ -475,6 +479,7 @@ impl App {
             active_tools: Vec::new(),
             tool_msg_map: HashMap::new(),
             subagents: HashMap::new(),
+            subagent_zoom_scroll: 0,
             input_history: Vec::new(),
             history_index: None,
             saved_input: String::new(),
@@ -613,6 +618,7 @@ impl App {
         match self.screen {
             Screen::Picker => self.handle_picker_key(key, acp, cwd).await,
             Screen::Chat => self.handle_chat_key(key, acp, cwd).await,
+            Screen::SubagentZoom { .. } => self.handle_zoom_key(key).await,
             Screen::Disconnected(_) => {
                 // Any key quits from disconnected state
                 match (key.modifiers, key.code) {
@@ -989,6 +995,23 @@ impl App {
                 self.show_thinking = !self.show_thinking;
                 // Invalidate cache — thought messages render differently
                 self.line_cache.clear();
+            }
+
+            // Ctrl+Z: zoom into most-recent subagent session
+            (KeyModifiers::CONTROL, KeyCode::Char('z')) => {
+                let target = self.messages.iter().rev().find_map(|m| {
+                    if matches!(m.role, Role::Subagent) {
+                        Some(m.content.clone())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(child_sid) = target {
+                    self.subagent_zoom_scroll = 0;
+                    // TODO(task-9): replay from _hermes/get_session_history for subagents
+                    // where we joined mid-stream. For now, render from task.events directly.
+                    self.screen = Screen::SubagentZoom { child_session_id: child_sid };
+                }
             }
 
             // Open external editor (Ctrl+G)
@@ -1567,6 +1590,26 @@ impl App {
             Ok(()) => format!("copied {} chars to clipboard", text.chars().count()),
             Err(e) => format!("copy failed: {e}"),
         }
+    }
+
+    // ---- Zoom view key handler ------------------------------------------------
+
+    async fn handle_zoom_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.screen = Screen::Chat,
+            KeyCode::Up => {
+                if self.subagent_zoom_scroll == 0 {
+                    self.screen = Screen::Chat;
+                } else {
+                    self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_add(1),
+            KeyCode::PageUp => self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_sub(10),
+            KeyCode::PageDown => self.subagent_zoom_scroll = self.subagent_zoom_scroll.saturating_add(10),
+            _ => {}
+        }
+        Ok(())
     }
 
     // ---- Local slash commands ------------------------------------------------
