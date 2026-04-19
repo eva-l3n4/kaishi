@@ -298,6 +298,15 @@ fn render_complete(
         ("✓", palette::SUCCESS, "complete")
     };
 
+    // Soft divider — a row of middle-dots in DIM — sets the completion
+    // block apart from the last tool call, so the final summary reads as
+    // a capstone instead of just another event in the stream.
+    let divider_width = (width as usize).saturating_sub(4).min(48);
+    lines.push(Line::from(Span::styled(
+        format!("  {}", "·".repeat(divider_width)),
+        Style::default().fg(palette::DIM),
+    )));
+
     let mut spans = vec![
         Span::styled("  ", Style::default()),
         Span::styled(
