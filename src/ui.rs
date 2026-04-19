@@ -1368,7 +1368,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
 
     // Key hints in bottom border (only when idle)
     let bottom_hint = if is_idle && app.input.is_empty() {
-        " Ctrl+P palette · Ctrl+B sessions · Ctrl+D quit "
+        " Ctrl+P palette · Ctrl+D quit "
     } else if is_idle {
         " enter send · Ctrl+J newline "
     } else {
