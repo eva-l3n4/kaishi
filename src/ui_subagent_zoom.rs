@@ -12,7 +12,7 @@ use crate::ui::palette;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -220,19 +220,25 @@ fn render_thinking(lines: &mut Vec<Line<'static>>, text: &str, width: u16) {
 
 fn render_tool_box(lines: &mut Vec<Line<'static>>, name: &str, preview: Option<&str>, width: u16) {
     // Matches the parent transcript's framed tool call style:
-    //   ┌─ tool_name ───────────
+    //   ┌─ ⚙ tool_name ───────────
     //   │ preview line 1
     //   │ preview line 2
     //   └─
-    let accent = palette::ACCENT_USER; // cyan in Catppuccin → matches existing tool accent
+    // The `⚙` glyph and DIM accent mirror the in-progress tool-call
+    // rendering in `ui::render_message` (the zoom view never shows a
+    // completed/failed state per tool; ✓/✗ appear on the final block
+    // rendered by `render_complete`).
+    let accent = palette::DIM;
 
-    let header_text = format!("{} ", name);
-    let ind_len = 2; // "  " leading indent
-    let remaining = (width as usize).saturating_sub(ind_len + 3 + header_text.len());
+    // "  ┌─ ⚙ " = 2 + 3 + 2 = 7 cols before the name; reserve a bit more
+    // slack so the rule never clips into the viewport edge.
+    let header_visible = 7 + name.chars().count() + 1; // trailing space
+    let remaining = (width as usize).saturating_sub(header_visible + 2);
     let rule = "─".repeat(remaining.min(60));
 
     lines.push(Line::from(vec![
         Span::styled("  ┌─ ".to_string(), Style::default().fg(palette::BORDER)),
+        Span::styled("⚙ ".to_string(), Style::default().fg(accent)),
         Span::styled(
             name.to_string(),
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
@@ -246,12 +252,29 @@ fn render_tool_box(lines: &mut Vec<Line<'static>>, name: &str, preview: Option<&
     if let Some(p) = preview {
         let p = p.trim();
         if !p.is_empty() {
-            let max_line = (width as usize).saturating_sub(ind_len + 3);
-            for row in wrap_plain(p, max_line) {
-                lines.push(Line::from(vec![
-                    Span::styled("  │ ".to_string(), Style::default().fg(palette::BORDER)),
-                    Span::styled(row, Style::default().fg(palette::TEXT)),
-                ]));
+            // "  │ " = 4 cols
+            let max_line = (width as usize).saturating_sub(4);
+            for raw_row in p.lines() {
+                // Diff/patch-aware coloring — mirrors the parent transcript's
+                // tool-message renderer so a `patch` or `terminal` preview
+                // that contains a unified diff stays legible here too.
+                let row_color = if raw_row.starts_with('+') && !raw_row.starts_with("+++") {
+                    Color::Green
+                } else if raw_row.starts_with('-') && !raw_row.starts_with("---") {
+                    Color::Red
+                } else if raw_row.starts_with("@@ ") {
+                    Color::Cyan
+                } else if raw_row.starts_with("---") || raw_row.starts_with("+++") {
+                    Color::Yellow
+                } else {
+                    palette::TEXT
+                };
+                for wrapped in wrap_plain(raw_row, max_line) {
+                    lines.push(Line::from(vec![
+                        Span::styled("  │ ".to_string(), Style::default().fg(palette::BORDER)),
+                        Span::styled(wrapped, Style::default().fg(row_color)),
+                    ]));
+                }
             }
         }
     }
