@@ -11,8 +11,8 @@ use crate::event::{AppEvent, ApprovalOption, SessionInfo, Usage};
 /// All known slash commands for tab completion.
 const SLASH_COMMANDS: &[&str] = &[
     "/clear", "/compact", "/context", "/effort", "/exit", "/help", "/model",
-    "/new", "/quit", "/reset", "/save", "/title", "/tools", "/usage",
-    "/verbose", "/version", "/yolo",
+    "/new", "/quit", "/reset", "/save", "/sessions", "/title", "/tools",
+    "/usage", "/verbose", "/version", "/yolo",
 ];
 
 /// Visible role tag for messages in the conversation.
@@ -364,6 +364,7 @@ impl App {
     pub fn build_palette_entries() -> Vec<PaletteEntry> {
         vec![
             PaletteEntry { label: "New session".into(), keybind: None, action: PaletteAction::SlashCommand("/new".into()) },
+            PaletteEntry { label: "Switch session".into(), keybind: Some("Ctrl+B".into()), action: PaletteAction::SlashCommand("/sessions".into()) },
             PaletteEntry { label: "Compact context".into(), keybind: None, action: PaletteAction::SlashCommand("/compact".into()) },
             PaletteEntry { label: "Save session".into(), keybind: None, action: PaletteAction::SlashCommand("/save".into()) },
             PaletteEntry { label: "Toggle YOLO mode".into(), keybind: Some("Shift+Tab".into()), action: PaletteAction::Keybind("toggle_yolo".into()) },
@@ -1359,6 +1360,19 @@ impl App {
                 }
                 true
             }
+            "/sessions" | "/switch" => {
+                self.return_to_picker();
+                if let Some(tx) = &self.event_tx {
+                    let tx = tx.clone();
+                    let acp_cloned = acp.clone();
+                    tokio::spawn(async move {
+                        if let Ok(sessions) = acp_cloned.list_sessions().await {
+                            let _ = tx.send(crate::event::AppEvent::SessionsLoaded(sessions));
+                        }
+                    });
+                }
+                true
+            }
             "/verbose" | "/v" => {
                 self.verbose = !self.verbose;
                 self.line_cache.clear();
@@ -1377,6 +1391,7 @@ impl App {
                     "Local commands:\n\
                      \n\
                      /new             Start a new session\n\
+                     /sessions        Return to session picker\n\
                      /clear           Clear the screen\n\
                      /verbose         Toggle tool call details\n\
                      /save [path]     Export session to markdown\n\
@@ -1398,6 +1413,7 @@ impl App {
                      Keys:\n\
                      \n\
                      Ctrl+P:   Command palette\n\
+                     Ctrl+B:   Back to session picker\n\
                      Ctrl+R:   Reverse history search\n\
                      Esc Esc:  Undo last turn\n\
                      Scroll:   PgUp/PgDn, Ctrl+U, mouse wheel\n\
