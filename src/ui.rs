@@ -1766,3 +1766,41 @@ mod md_tests {
             "intraword underscore should not italicize: {:?}", spans);
     }
 }
+
+#[cfg(test)]
+mod bold_hug_tests {
+    use super::parse_inline_spans;
+
+    fn render(text: &str) -> String {
+        parse_inline_spans(text)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn bold_followed_by_space() {
+        assert_eq!(render("A **bold** word"), "A bold word");
+    }
+
+    #[test]
+    fn bold_followed_by_punctuation() {
+        assert_eq!(render("Text **bold**, comma."), "Text bold, comma.");
+    }
+
+    #[test]
+    fn bold_no_space_after() {
+        // Edge case from user's concern: **bold**word — this is the actual
+        // semantics the spec requires (no whitespace inserted).
+        assert_eq!(render("**bold**word"), "boldword");
+    }
+
+    #[test]
+    fn bold_spans_preserve_trailing_space() {
+        let spans = parse_inline_spans("**bold** after");
+        // Should be: [bold] + [" after"]
+        let contents: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(contents.iter().any(|s| s.starts_with(" ")),
+            "expected a span starting with space; got {:?}", contents);
+    }
+}
