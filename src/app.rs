@@ -1792,10 +1792,12 @@ impl App {
     pub fn handle_scroll(&mut self, delta: i16) {
         match self.screen {
             Screen::Picker => {
+                // delta > 0 = wheel up → scroll toward top (decrease offset).
+                // delta < 0 = wheel down → scroll toward bottom (increase offset).
                 if delta > 0 {
-                    self.picker_scroll_offset = self.picker_scroll_offset.saturating_add(delta as u16);
+                    self.picker_scroll_offset = self.picker_scroll_offset.saturating_sub(delta as u16);
                 } else {
-                    self.picker_scroll_offset = self.picker_scroll_offset.saturating_sub((-delta) as u16);
+                    self.picker_scroll_offset = self.picker_scroll_offset.saturating_add((-delta) as u16);
                 }
             }
             Screen::Chat => {

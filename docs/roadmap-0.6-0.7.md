@@ -84,6 +84,17 @@ Shipped 2026-04-19.
 
 ---
 
+## v0.8.4 — Scroll direction ✓
+
+Shipped 2026-04-19.
+
+- ✓ **Picker mouse wheel no longer inverted** — wheel-up goes up
+  the list, wheel-down goes down. The handler was tuned for the
+  old inverted scroll math fixed in v0.8.3; flipped the signs to
+  match offset-0-means-top semantics.
+
+---
+
 ## v0.9.0+ — Aspirational
 
 19. **Session deletion from picker**
