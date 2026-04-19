@@ -10,6 +10,17 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::event::{AppEvent, ApprovalOption, SessionInfo, Usage};
 
+/// Strip ASCII NUL bytes that can sneak into content from clipboard pastes,
+/// malformed streams, or shell output. Nulls corrupt clipboard round-trips
+/// and confuse some terminal renderers.
+pub fn scrub_nulls(s: &str) -> String {
+    if s.contains('\0') {
+        s.chars().filter(|&c| c != '\0').collect()
+    } else {
+        s.to_string()
+    }
+}
+
 // -------------------------------------------------------------------
 // JSON-RPC wire types
 // -------------------------------------------------------------------
@@ -294,7 +305,7 @@ impl AcpClient {
                     .pointer("/content/text")
                     .and_then(|v| v.as_str())
                 {
-                    let _ = event_tx.send(AppEvent::AgentMessage(text.to_string()));
+                    let _ = event_tx.send(AppEvent::AgentMessage(scrub_nulls(text)));
                 }
             }
             "agent_thought_chunk" => {
@@ -302,7 +313,7 @@ impl AcpClient {
                     .pointer("/content/text")
                     .and_then(|v| v.as_str())
                 {
-                    let _ = event_tx.send(AppEvent::AgentThought(text.to_string()));
+                    let _ = event_tx.send(AppEvent::AgentThought(scrub_nulls(text)));
                 }
             }
             "tool_call" => {
