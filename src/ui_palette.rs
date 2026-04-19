@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use crate::app::{App, ModalState};
 use crate::ui::palette;
 
@@ -110,7 +110,9 @@ pub fn draw_command_palette(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    f.render_widget(List::new(items), layout[2]);
+    let mut list_state = ListState::default().with_selected(Some(selected));
+    let list = List::new(items);
+    f.render_stateful_widget(list, layout[2], &mut list_state);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
