@@ -930,23 +930,51 @@ fn render_message(
 
 // ─── Markdown → ratatui Lines ────────────────────────────────────────────
 
+/// Horizontal alignment for a table column, parsed from the GFM separator row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColAlign {
+    Left,
+    Center,
+    Right,
+}
+
 /// True iff `line` looks like a GFM table separator row: `| --- | :--: |` etc.
 /// Requires at least one dash per cell and all cells match `[- :]+` with a dash.
+#[cfg(test)]
 fn is_table_separator(line: &str) -> bool {
+    parse_table_separator(line).is_some()
+}
+
+/// Parse a GFM separator row into per-column alignments, or None if `line`
+/// isn't a valid separator. Recognizes `---` (left), `:---:` (center),
+/// `---:` (right), and `:---` (explicit left).
+fn parse_table_separator(line: &str) -> Option<Vec<ColAlign>> {
     let trimmed = line.trim();
     if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
-        return false;
+        return None;
     }
     let cells: Vec<&str> = trimmed.trim_matches('|').split('|').collect();
     if cells.is_empty() {
-        return false;
+        return None;
     }
-    cells.iter().all(|cell| {
+    let mut aligns = Vec::with_capacity(cells.len());
+    for cell in cells {
         let c = cell.trim();
-        !c.is_empty()
-            && c.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
-            && c.contains('-')
-    })
+        if c.is_empty()
+            || !c.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
+            || !c.contains('-')
+        {
+            return None;
+        }
+        let left = c.starts_with(':');
+        let right = c.ends_with(':');
+        aligns.push(match (left, right) {
+            (true, true) => ColAlign::Center,
+            (_, true) => ColAlign::Right,
+            _ => ColAlign::Left,
+        });
+    }
+    Some(aligns)
 }
 
 /// True iff `line` contains box-drawing chars indicating pre-rendered output.
@@ -979,109 +1007,319 @@ fn has_box_drawing(line: &str) -> bool {
     })
 }
 
-/// Render accumulated table rows. If `has_separator` is false, the buffered
-/// rows weren't a real GFM table — emit them as plain inline-parsed lines so
-/// the user still sees their original text.
+/// Render accumulated table rows. If `aligns` is None, the buffered rows
+/// weren't a real GFM table — emit them as plain inline-parsed lines so the
+/// user still sees their original text.
 fn flush_table_buffer<'a>(
     rows: &mut Vec<Vec<String>>,
-    has_separator: &mut bool,
+    aligns: &mut Option<Vec<ColAlign>>,
     lines: &mut Vec<Line<'a>>,
     narrow: bool,
+    width: usize,
 ) {
     if rows.is_empty() {
-        *has_separator = false;
+        *aligns = None;
         return;
     }
 
-    if !*has_separator {
-        // Not a real table — render each buffered row as a plain line.
-        let ind = indent(narrow);
-        for row in rows.iter() {
-            let joined = format!("| {} |", row.join(" | "));
-            let mut spans = vec![Span::raw(ind.to_string())];
-            spans.extend(parse_inline_spans(&joined));
-            lines.push(Line::from(spans));
+    let taken = aligns.take();
+    match taken {
+        None => {
+            // Not a real table — render each buffered row as a plain line.
+            let ind = indent(narrow);
+            for row in rows.iter() {
+                let joined = format!("| {} |", row.join(" | "));
+                let mut spans = vec![Span::raw(ind.to_string())];
+                spans.extend(parse_inline_spans(&joined));
+                lines.push(Line::from(spans));
+            }
+            rows.clear();
         }
-        rows.clear();
-        *has_separator = false;
-        return;
+        Some(col_aligns) => {
+            flush_table(rows, lines, narrow, width, &col_aligns);
+        }
+    }
+}
+
+/// Word-wrap `text` so each produced line fits within `col_width` display cells.
+/// Falls back to character-level breaks for words wider than the column.
+/// Empty input yields a single empty line so callers can rely on len() >= 1.
+fn wrap_cell_text(text: &str, col_width: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    if col_width == 0 {
+        return vec![text.to_string()];
     }
 
-    flush_table(rows, lines, narrow);
-    *has_separator = false;
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+
+    let push_char_wrapped = |word: &str, cur: &mut String, cur_w: &mut usize, lines: &mut Vec<String>| {
+        for ch in word.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if *cur_w + cw > col_width && *cur_w > 0 {
+                lines.push(std::mem::take(cur));
+                *cur_w = 0;
+            }
+            cur.push(ch);
+            *cur_w += cw;
+        }
+    };
+
+    for word in text.split_whitespace() {
+        let word_w = UnicodeWidthStr::width(word);
+        if cur_w == 0 {
+            if word_w > col_width {
+                push_char_wrapped(word, &mut cur, &mut cur_w, &mut lines);
+            } else {
+                cur.push_str(word);
+                cur_w = word_w;
+            }
+        } else if cur_w + 1 + word_w <= col_width {
+            cur.push(' ');
+            cur.push_str(word);
+            cur_w += 1 + word_w;
+        } else {
+            lines.push(std::mem::take(&mut cur));
+            cur_w = 0;
+            if word_w > col_width {
+                push_char_wrapped(word, &mut cur, &mut cur_w, &mut lines);
+            } else {
+                cur.push_str(word);
+                cur_w = word_w;
+            }
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Shrink `nat` widths to fit within `avail`, preferring to keep each column
+/// at least as wide as its `min` (longest unbreakable word) when possible.
+///
+/// Invariant: `sum(result) <= avail`. Row synchronization is sacred — if the
+/// minimums can't all fit, we char-wrap some cells rather than overflow and
+/// let the outer pre-wrap scramble the table.
+///
+/// Growth priority:
+///   1. Baseline 1 cell per non-empty column.
+///   2. Grow toward `min` (word integrity).
+///   3. Grow toward `nat` (breathing room).
+fn shrink_column_widths(nat: &[usize], min: &[usize], avail: usize) -> Vec<usize> {
+    let n = nat.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // Fits naturally — just use natural widths.
+    let total: usize = nat.iter().sum();
+    if total == 0 || total <= avail {
+        return nat.to_vec();
+    }
+    if avail == 0 {
+        return vec![0; n];
+    }
+
+    // Phase 1: baseline of 1 cell for each non-empty column (else 0).
+    let mut out: Vec<usize> = nat.iter().map(|&w| if w == 0 { 0 } else { 1 }).collect();
+    let mut sum: usize = out.iter().sum();
+    if sum >= avail {
+        // Even the baseline overflows — truncate. This is a pathological
+        // narrow-viewport case; caller will char-chop cells.
+        return out;
+    }
+
+    // Per-column "soft cap" for phase 2: longest word, but never more than
+    // natural width (no point reserving space that isn't there).
+    let floors: Vec<usize> = (0..n)
+        .map(|i| min.get(i).copied().unwrap_or(1).max(1).min(nat[i].max(1)))
+        .collect();
+
+    // Phase 2: grow toward floors, picking the column with the biggest gap
+    // each step — this spreads growth fairly across columns.
+    while sum < avail {
+        let mut best: Option<usize> = None;
+        let mut best_gap: i64 = 0;
+        for i in 0..n {
+            let gap = floors[i] as i64 - out[i] as i64;
+            if gap > best_gap {
+                best_gap = gap;
+                best = Some(i);
+            }
+        }
+        match best {
+            Some(i) => {
+                out[i] += 1;
+                sum += 1;
+            }
+            None => break,
+        }
+    }
+
+    // Phase 3: grow toward natural widths.
+    while sum < avail {
+        let mut best: Option<usize> = None;
+        let mut best_gap: i64 = 0;
+        for i in 0..n {
+            let gap = nat[i] as i64 - out[i] as i64;
+            if gap > best_gap {
+                best_gap = gap;
+                best = Some(i);
+            }
+        }
+        match best {
+            Some(i) => {
+                out[i] += 1;
+                sum += 1;
+            }
+            None => break,
+        }
+    }
+
+    out
 }
 
 /// Render accumulated table rows as aligned columns, then clear the buffer.
 /// Cells are parsed as inline markdown (so **bold**, *italic*, `code`, and
 /// links styled correctly). Column widths use `unicode-width` so emoji and
-/// wide CJK chars align properly.
-fn flush_table<'a>(rows: &mut Vec<Vec<String>>, lines: &mut Vec<Line<'a>>, narrow: bool) {
+/// wide CJK chars align properly. If the natural table width exceeds the
+/// available terminal `width`, columns are shrunk proportionally and cell
+/// text is word-wrapped onto additional lines per row.
+fn flush_table<'a>(
+    rows: &mut Vec<Vec<String>>,
+    lines: &mut Vec<Line<'a>>,
+    narrow: bool,
+    width: usize,
+    aligns: &[ColAlign],
+) {
     if rows.is_empty() {
         return;
     }
 
-    // Parse every cell into spans up front — we need both the spans and their
-    // display width for column sizing.
-    let parsed_rows: Vec<Vec<(Vec<Span<'static>>, usize)>> = rows
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|cell| {
-                    let spans = parse_inline_spans(cell);
-                    let width: usize = spans
-                        .iter()
-                        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                        .sum();
-                    (spans, width)
-                })
-                .collect()
-        })
-        .collect();
+    let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    if num_cols == 0 {
+        rows.clear();
+        return;
+    }
 
-    let num_cols = parsed_rows.iter().map(|r| r.len()).max().unwrap_or(0);
-    let mut col_widths = vec![0usize; num_cols];
-    for row in &parsed_rows {
-        for (j, (_, width)) in row.iter().enumerate() {
+    // Two widths per column:
+    //   raw_widths: width of the raw cell text (including markdown markers
+    //     like `**` and `*`). Drives column sizing & wrap budgets, so we never
+    //     wrap mid-emphasis and lose styling.
+    //   min_widths: width of the longest raw "word" in the column — the
+    //     floor below which proportional shrinking would force char-level
+    //     mid-word wrapping (e.g. "Status" becoming "St/at/us").
+    let mut raw_widths = vec![0usize; num_cols];
+    let mut min_widths = vec![0usize; num_cols];
+    for row in rows.iter() {
+        for (j, cell) in row.iter().enumerate() {
             if j < num_cols {
-                col_widths[j] = col_widths[j].max(*width);
+                raw_widths[j] = raw_widths[j].max(UnicodeWidthStr::width(cell.as_str()));
+                let longest_word = cell
+                    .split_whitespace()
+                    .map(UnicodeWidthStr::width)
+                    .max()
+                    .unwrap_or(0);
+                min_widths[j] = min_widths[j].max(longest_word);
             }
         }
     }
 
+    // Available cells for *content* (excluding indent + " │ " separators).
     let ind = indent(narrow);
+    let indent_w = UnicodeWidthStr::width(ind);
+    let sep_total = 3usize.saturating_mul(num_cols.saturating_sub(1));
+    let avail = width.saturating_sub(indent_w).saturating_sub(sep_total);
 
-    for (row_idx, row) in parsed_rows.iter().enumerate() {
-        let mut spans: Vec<Span> = vec![Span::raw(ind.to_string())];
+    // Shrink to fit. Use raw_widths as the sizing basis and min_widths as
+    // per-column floors so proportional shrinking can never split a word.
+    // If `width` is 0, use raw widths directly.
+    let col_widths: Vec<usize> = if width == 0 {
+        raw_widths.clone()
+    } else {
+        shrink_column_widths(&raw_widths, &min_widths, avail.max(num_cols))
+    };
 
-        for (j, (cell_spans, cell_width)) in row.iter().enumerate() {
-            let col_width = col_widths.get(j).copied().unwrap_or(*cell_width);
+    for (row_idx, row) in rows.iter().enumerate() {
+        // Word-wrap each cell to its column width, then parse inline markdown
+        // on each wrapped physical line. Produces a Vec<Vec<Span>> per cell.
+        let wrapped_cells: Vec<Vec<Vec<Span<'static>>>> = (0..num_cols)
+            .map(|j| {
+                let col_width = col_widths.get(j).copied().unwrap_or(0);
+                let raw = row.get(j).map(|s| s.as_str()).unwrap_or("");
+                wrap_cell_text(raw, col_width)
+                    .into_iter()
+                    .map(|line| parse_inline_spans(&line))
+                    .collect()
+            })
+            .collect();
 
-            if j > 0 {
-                spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-            }
+        let row_height = wrapped_cells
+            .iter()
+            .map(|c| c.len())
+            .max()
+            .unwrap_or(1)
+            .max(1);
 
-            // Header row: wrap every cell span in BOLD on top of its existing style.
-            if row_idx == 0 {
-                for s in cell_spans {
-                    let style = s.style.add_modifier(Modifier::BOLD);
-                    spans.push(Span::styled(s.content.clone().into_owned(), style));
+        for physical_row in 0..row_height {
+            let mut spans: Vec<Span> = vec![Span::raw(ind.to_string())];
+
+            for (j, cell_lines) in wrapped_cells.iter().enumerate() {
+                let col_width = col_widths.get(j).copied().unwrap_or(0);
+
+                if j > 0 {
+                    spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
                 }
-            } else {
-                for s in cell_spans {
-                    spans.push(s.clone());
+
+                let empty: Vec<Span<'static>> = Vec::new();
+                let cell_spans = cell_lines.get(physical_row).unwrap_or(&empty);
+                let cell_render_width: usize = cell_spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+
+                // Split total padding into left/right based on column alignment.
+                let total_pad = col_width.saturating_sub(cell_render_width);
+                let align = aligns.get(j).copied().unwrap_or(ColAlign::Left);
+                let (left_pad, right_pad) = match align {
+                    ColAlign::Left => (0, total_pad),
+                    ColAlign::Right => (total_pad, 0),
+                    ColAlign::Center => {
+                        let l = total_pad / 2;
+                        (l, total_pad - l)
+                    }
+                };
+
+                if left_pad > 0 {
+                    spans.push(Span::raw(" ".repeat(left_pad)));
+                }
+
+                // Header row (only on the first physical row of row 0): BOLD.
+                if row_idx == 0 && physical_row == 0 {
+                    for s in cell_spans {
+                        let style = s.style.add_modifier(Modifier::BOLD);
+                        spans.push(Span::styled(s.content.clone().into_owned(), style));
+                    }
+                } else {
+                    for s in cell_spans {
+                        spans.push(s.clone());
+                    }
+                }
+
+                if right_pad > 0 {
+                    spans.push(Span::raw(" ".repeat(right_pad)));
                 }
             }
 
-            // Pad the right side with plain spaces based on display width.
-            let pad = col_width.saturating_sub(*cell_width);
-            if pad > 0 {
-                spans.push(Span::raw(" ".repeat(pad)));
-            }
+            lines.push(Line::from(spans));
         }
 
-        lines.push(Line::from(spans));
-
-        // Separator row — width of each column in dashes, joined with ─┼─.
+        // Separator row after the header (below its last physical line).
         if row_idx == 0 {
             let sep: String = col_widths
                 .iter()
@@ -1098,11 +1336,11 @@ fn flush_table<'a>(rows: &mut Vec<Vec<String>>, lines: &mut Vec<Line<'a>>, narro
     rows.clear();
 }
 
-fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narrow: bool) {
+fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, width: usize, narrow: bool) {
     let mut in_code_block = false;
     let mut code_lang = String::new();
     let mut table_rows: Vec<Vec<String>> = Vec::new();
-    let mut table_has_separator = false;
+    let mut table_aligns: Option<Vec<ColAlign>> = None;
 
     for raw_line in text.lines() {
         // Fenced code blocks
@@ -1212,7 +1450,7 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
 
         // Blockquotes
         if let Some(quote) = trimmed.strip_prefix("> ") {
-            flush_table_buffer(&mut table_rows, &mut table_has_separator, lines, narrow);
+            flush_table_buffer(&mut table_rows, &mut table_aligns, lines, narrow, width);
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{}▎ ", indent(narrow)),
@@ -1233,14 +1471,14 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
         // (pre-rendered ASCII tables from the server) are never treated as
         // pipe-tables — they drop through to plain paragraph rendering.
         if trimmed.starts_with('|') && trimmed.ends_with('|') && !has_box_drawing(trimmed) {
-            if is_table_separator(trimmed) {
+            if let Some(parsed_aligns) = parse_table_separator(trimmed) {
                 if table_rows.len() == 1 {
                     // Valid GFM separator following a header row.
-                    table_has_separator = true;
+                    table_aligns = Some(parsed_aligns);
                     continue;
                 }
                 // Stray separator outside table context — render as paragraph.
-                flush_table_buffer(&mut table_rows, &mut table_has_separator, lines, narrow);
+                flush_table_buffer(&mut table_rows, &mut table_aligns, lines, narrow, width);
                 let mut spans = vec![Span::raw(indent(narrow).to_string())];
                 spans.extend(parse_inline_spans(raw_line.trim_start()));
                 lines.push(Line::from(spans));
@@ -1256,7 +1494,7 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
         }
 
         // If we were accumulating table rows but this line isn't a table line, flush.
-        flush_table_buffer(&mut table_rows, &mut table_has_separator, lines, narrow);
+        flush_table_buffer(&mut table_rows, &mut table_aligns, lines, narrow, width);
 
         // Regular paragraph
         if trimmed.is_empty() {
@@ -1277,7 +1515,7 @@ fn render_markdown_lines(lines: &mut Vec<Line>, text: &str, _width: usize, narro
     }
 
     // Flush any remaining table rows
-    flush_table_buffer(&mut table_rows, &mut table_has_separator, lines, narrow);
+    flush_table_buffer(&mut table_rows, &mut table_aligns, lines, narrow, width);
 }
 
 /// Parse inline markdown: **bold**, *italic*, `code`
@@ -1868,6 +2106,136 @@ mod md_tests {
                 "first and last row widths differ: widths={:?}",
                 widths
             );
+        }
+    }
+
+    /// Regression for the narrow-terminal table bug (the one in IMG_2880.jpg):
+    /// a wide table rendered into a small terminal must (1) fit within the
+    /// width, (2) not spray separator fragments onto multiple lines, and
+    /// (3) preserve bold/italic styling inside cells that had to wrap.
+    #[test]
+    fn wide_table_shrinks_to_narrow_terminal() {
+        use ratatui::style::Modifier;
+        use unicode_width::UnicodeWidthStr;
+
+        let text = "\
+| Feature | Status | Notes |
+| --- | :---: | --- |
+| `**bold**` inside cells | ✅ | **works** |
+| `*italic*` inside cells | ✅ | *also works* |
+| Long content wrapping | ⚠️ | depends on terminal width and your wrap strategy — this cell is intentionally verbose |
+";
+
+        let mut lines = Vec::new();
+        let width = 72usize;
+        render_markdown_lines(&mut lines, text, width, false);
+
+        // No rendered line should exceed the terminal width.
+        for line in &lines {
+            let w: usize = line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert!(
+                w <= width,
+                "line exceeded terminal width {}: got {} -> {:?}",
+                width,
+                w,
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            );
+        }
+
+        // Exactly one separator line (the `─┼─` underline). If wrapping
+        // scattered the separator, we'd see multiple lines dominated by `─`.
+        let sep_line_count = lines
+            .iter()
+            .filter(|l| {
+                let s: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                !s.is_empty() && s.chars().all(|c| matches!(c, '─' | '┼' | ' '))
+            })
+            .count();
+        assert_eq!(
+            sep_line_count, 1,
+            "expected exactly one separator line, got {}",
+            sep_line_count
+        );
+
+        // Styling inside wrapped cells survives: the `works` span should still
+        // be bold, and `also works` should still be italic.
+        let all_spans: Vec<_> = lines.iter().flat_map(|l| l.spans.iter()).collect();
+        assert!(
+            all_spans
+                .iter()
+                .any(|s| s.content == "works" && s.style.add_modifier.contains(Modifier::BOLD)),
+            "bold 'works' span missing after wrap"
+        );
+        assert!(
+            all_spans.iter().any(|s| s.content == "also works"
+                && s.style.add_modifier.contains(Modifier::ITALIC)),
+            "italic 'also works' span missing after wrap"
+        );
+
+        // No raw `**` markers should leak as *unstyled* span content (the
+        // bug in the screenshot: wrapping broke span boundaries and dumped
+        // `**`). `**` inside a code span (`\`**bold**\``) is legitimate —
+        // code spans get a distinctive fg color, so exclude those.
+        assert!(
+            !all_spans.iter().any(|s| {
+                s.content.contains("**")
+                    && s.style.fg.is_none()
+                    && !s.style.add_modifier.contains(Modifier::BOLD)
+            }),
+            "raw ** leaked after wrap: {:?}",
+            all_spans
+                .iter()
+                .filter(|s| s.content.contains("**"))
+                .map(|s| (s.content.as_ref(), s.style))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Row synchronization must hold even at pathologically narrow widths —
+    /// we'd rather char-wrap a long token than let the outer pre-wrap
+    /// scramble column alignment. Regression for the staircased rendering
+    /// seen in Screenshot_4.png.
+    #[test]
+    fn narrow_table_never_exceeds_width() {
+        use unicode_width::UnicodeWidthStr;
+
+        // Mimics the skills table from the bug: long hyphenated tokens in
+        // the last column that can't fit their "natural" word width.
+        let text = "\
+| Category | Purpose | Skill |
+| --- | --- | --- |
+| devops | Debug 401 errors on Azure Foundry | azure-ai-foundry-auth |
+| devops | Manage LiteLLM + model-router proxy | litellm-model-router-stack |
+| github | Full PR lifecycle via gh CLI | github-pr-workflow |
+";
+
+        for width in [40usize, 50, 60, 70] {
+            let mut lines = Vec::new();
+            render_markdown_lines(&mut lines, text, width, false);
+            for line in &lines {
+                let w: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                assert!(
+                    w <= width,
+                    "width {}: line exceeded: {} -> {:?}",
+                    width,
+                    w,
+                    line.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                );
+            }
         }
     }
 }
