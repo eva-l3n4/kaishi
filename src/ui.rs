@@ -1252,6 +1252,96 @@ fn parse_inline_spans(text: &str) -> Vec<Span<'static>> {
             continue;
         }
 
+        // Bold underscore: __...__
+        // CommonMark intraword-underscore rule: only emphasize when not adjacent
+        // to alphanumerics (so `snake_case` and `file_name.rs` stay plain).
+        if ch == '_' && text[i..].starts_with("__") {
+            let before_is_word = current
+                .chars()
+                .last()
+                .or_else(|| {
+                    spans
+                        .last()
+                        .and_then(|s| s.content.chars().last())
+                })
+                .is_some_and(|c| c.is_alphanumeric());
+            if !before_is_word {
+                if !current.is_empty() {
+                    spans.push(Span::raw(std::mem::take(&mut current)));
+                }
+                chars.next();
+                chars.next();
+                let mut bold_text = String::new();
+                let mut closed = false;
+                while let Some(&(j, c)) = chars.peek() {
+                    if c == '_' && text[j..].starts_with("__") {
+                        let after = text[j + 2..].chars().next();
+                        if !after.is_some_and(|c| c.is_alphanumeric()) {
+                            chars.next();
+                            chars.next();
+                            closed = true;
+                            break;
+                        }
+                    }
+                    chars.next();
+                    bold_text.push(c);
+                }
+                if closed {
+                    spans.push(Span::styled(
+                        bold_text,
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    current.push_str("__");
+                    current.push_str(&bold_text);
+                }
+                continue;
+            }
+        }
+
+        // Italic underscore: _..._
+        if ch == '_' {
+            let before_is_word = current
+                .chars()
+                .last()
+                .or_else(|| {
+                    spans
+                        .last()
+                        .and_then(|s| s.content.chars().last())
+                })
+                .is_some_and(|c| c.is_alphanumeric());
+            if !before_is_word {
+                if !current.is_empty() {
+                    spans.push(Span::raw(std::mem::take(&mut current)));
+                }
+                chars.next();
+                let mut italic_text = String::new();
+                let mut closed = false;
+                while let Some(&(j, c)) = chars.peek() {
+                    if c == '_' {
+                        let after = text[j + 1..].chars().next();
+                        if !after.is_some_and(|c| c.is_alphanumeric()) {
+                            chars.next();
+                            closed = true;
+                            break;
+                        }
+                    }
+                    chars.next();
+                    italic_text.push(c);
+                }
+                if closed {
+                    spans.push(Span::styled(
+                        italic_text,
+                        Style::default().add_modifier(Modifier::ITALIC),
+                    ));
+                } else {
+                    current.push('_');
+                    current.push_str(&italic_text);
+                }
+                continue;
+            }
+        }
+
         // Markdown links: [text](url) — render text underlined, URL in dim
         if ch == '[' {
             // Look ahead for the full [text](url) pattern
